@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """trader-gold: analisis y planes para XAU/USD (swing, 4H y diario). Solo biblioteca estandar.
 Nunca coloca ordenes. Escribe JSON en ./trader/gold/ (relativo al directorio actual)."""
-import argparse, bisect, csv, html, io, json, math, os, random, sys, urllib.request, urllib.error
+import argparse, bisect, csv, html, io, json, math, os, random, sys, time, urllib.request, urllib.error
 from datetime import datetime, timedelta, timezone, date
 
 try:
@@ -889,9 +889,43 @@ def cmd_escenarios(a):
     print("\nSon escenarios condicionales, no recomendaciones. La decision es tuya.")
 
 # ---------- escenarios 15 min ----------
+def _oro_cerrado(ts):
+    """True si el mercado del oro esta cerrado (viernes 16:00 a domingo 17:00 GDL, aprox.)."""
+    t = datetime.fromtimestamp(ts, GDL)
+    wd = t.weekday()
+    return wd == 5 or (wd == 4 and t.hour >= 16) or (wd == 6 and t.hour < 17)
+
+def binance_15m(dias=60):
+    """Velas de 15 min de PAXG/USDT (Binance): sigue al oro SPOT con ~$1-5 de diferencia,
+    a diferencia de los futuros GC=F (decenas de dolares). Quita las horas en que el oro no cotiza."""
+    fin = int(time.time() * 1000)
+    ini = fin - dias * 86400 * 1000
+    out = {}
+    end = fin
+    for _ in range(12):
+        url = f"https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=15m&limit=1000&endTime={end}"
+        ks = json.loads(http(url, timeout=20))
+        if not ks:
+            break
+        for k in ks:
+            ts = int(k[0] // 1000)
+            if not _oro_cerrado(ts):
+                out[ts] = (ts, float(k[1]), float(k[2]), float(k[3]), float(k[4]))
+        end = int(ks[0][0]) - 1
+        if end < ini:
+            break
+    bars = [out[k] for k in sorted(out) if k * 1000 >= ini]
+    return bars if len(bars) > 200 else None
+
 def cargar_15m():
-    """Barras de 15 min (GC=F). Prueba 60d y, si falla, 30d. Se normalizan a multiplos de 15 min
-    (Yahoo a veces trae la vela en curso con una marca de tiempo intermedia)."""
+    """Barras de 15 min en precio SPOT (PAXG de Binance), que es lo que muestra el broker
+    (Exness, MetaTrader). Si Binance falla, usa futuros GC=F de Yahoo y lo avisa."""
+    try:
+        b = binance_15m()
+        if b:
+            return b, "PAXG"
+    except Exception:
+        pass
     for rng in ("60d", "30d"):
         b, sym = get_gold("15m", rng)
         if b:
@@ -915,11 +949,14 @@ def escenarios15_data(t, m15, h1, h4, d1, ev, now, rutas=3000, dias=1):
     e20, e50 = ema(cl, 20), ema(cl, 50)
     dire, why = dir_tendencia(t)
     n = t["niveles"]
+    # Los niveles del dia previo y de Asia vienen de futuros (GC=F); las velas de 15 min son spot.
+    # Se pasan a spot restando la diferencia actual futuros - spot (~0 si las velas tambien son GC=F).
+    basis = (t["precio"] - precio) if t.get("precio") else 0.0
     cands = []
     for k, nom in (("max_dia_previo", "maximo del dia previo"), ("min_dia_previo", "minimo del dia previo"),
                    ("max_asia", "maximo asiatico"), ("min_asia", "minimo asiatico")):
         if n.get(k) is not None:
-            cands.append((nom, n[k]))
+            cands.append((nom, round(n[k] - basis, 2)))
     sw = cerr[-16:]
     cands.append(("maximo de las ultimas 16 velas 15m", max(b[2] for b in sw)))
     cands.append(("minimo de las ultimas 16 velas 15m", min(b[3] for b in sw)))
@@ -997,7 +1034,7 @@ def escenarios15_data(t, m15, h1, h4, d1, ev, now, rutas=3000, dias=1):
             "ultima_vela_cerrada_gdl": datetime.fromtimestamp(ult[0], GDL).strftime("%Y-%m-%d %H:%M"),
             "swing16": [max(b[2] for b in sw), min(b[3] for b in sw)], "precio": precio, "atr15": atr, "ema20_15m": e20, "ema50_15m": e50, "tendencia": dire, "tendencia_razon": why,
             "soporte": S, "resistencia": R, "cuenta_configurada": bool(cuenta), "tipo_cuenta": tipo_cuenta(cfg),
-            "no_operar": no, "escenarios": esc}
+            "no_operar": no, "escenarios": esc, "basis_futuros_spot": round(basis, 2)}
 
 def cmd_escenarios15(a):
     t, (h1, h4, d1) = tecnico_data()
@@ -1013,7 +1050,9 @@ def cmd_escenarios15(a):
     print(f"Niveles calculados con el cierre 15m de las {E['base_hora_gdl']} ({fmt(E['base_cierre_15m'])}) | precio {fmt(E['precio'])} ({sym})")
     print(f"ATR 15m {fmt(E['atr15'])} | EMA20 {fmt(E['ema20_15m'])} / EMA50 {fmt(E['ema50_15m'])} (15m) | tendencia {E['tendencia']} ({E['tendencia_razon']}); solo escenarios a favor de la tendencia")
     if sym == "GC=F":
-        print("Aviso: futuros GC=F (Yahoo no entrego spot); puede diferir unos dolares del spot.")
+        print("Aviso: futuros GC=F (Binance no respondio); NO es el precio de tu broker: puede diferir decenas de dolares del spot.")
+    else:
+        print(f"Precios SPOT (PAXG de Binance, ~$1-5 del XAU/USD de tu broker). Niveles de dia previo/Asia pasados de futuros a spot (diferencia {fmt(E.get('basis_futuros_spot'))}).")
     if E["no_operar"]:
         print("CONDICIONES PARA NO OPERAR:")
         for x in E["no_operar"]:
@@ -1228,7 +1267,7 @@ function show(p,src){
  box.appendChild(document.createTextNode('Spot en vivo '));
  var b=document.createElement('b');b.className=c;b.textContent=p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});box.appendChild(b);
  var s=document.createElement('span');s.className='mut';s.id='vivo-t';s.textContent=' ('+src+', ahora)';box.appendChild(s);
- if(fgc){var w=document.createElement('div');w.className='mut';w.textContent='Ojo: la grafica, los niveles y los escenarios usan futuros GC=F, no este spot; pueden diferir decenas de dolares. Compara contra el mismo tipo de precio.';box.appendChild(w);}
+ if(fgc){var w=document.createElement('div');w.className='mut';w.textContent='La vista 15m y sus escenarios R/P estan en spot (como tu broker). Las vistas 4H/Diario y los escenarios A/B/C usan futuros GC=F, que pueden ir decenas de dolares arriba.';box.appendChild(w);}
 }
 function tick(){
  fetch('https://api.gold-api.com/price/XAU',{cache:'no-store'}).then(function(r){return r.json();}).then(function(j){
