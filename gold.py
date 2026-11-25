@@ -1013,7 +1013,8 @@ function tick(){
 tick();setInterval(tick,30000);
 setInterval(function(){var t=document.getElementById('vivo-t');if(t&&last){var s=Math.round((Date.now()-last)/1000);t.textContent=t.textContent.replace(/, .*\)$/,', hace '+s+' s)');}},5000);
 // En la version publicada (http/https) recarga cada 15 min para traer graficas, escenarios y noticias nuevas.
-if(/^https?:$/.test(location.protocol)){setTimeout(function(){location.reload();},15*60*1000);}
+// Se agrega ?t= para saltarse la copia guardada del navegador (GitHub Pages la guarda 10 min).
+if(/^https?:$/.test(location.protocol)){setTimeout(function(){location.replace(location.pathname+'?t='+Date.now());},15*60*1000);}
 })();
 </script></body></html>
 """
