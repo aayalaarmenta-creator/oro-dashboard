@@ -261,6 +261,15 @@ def calendario(now_utc):
 
 # ---------- datos tecnicos ----------
 def cargar_series():
+    """1h/4H/diario en precio SPOT (PAXG de Binance), igual que el broker. Si Binance falla,
+    cae a futuros GC=F de Yahoo y lo avisa."""
+    try:
+        h1 = binance_klines("1h", 400)
+        d1 = binance_klines("1d", 5 * 365)
+        if h1 and d1:
+            return h1, resample(h1, 4 * 3600), d1, "PAXG", None
+    except Exception:
+        pass
     h1, sym = get_gold("1h", "730d")
     nota = None
     d1, sym_d = get_gold("1d", "5y")
@@ -272,7 +281,7 @@ def cargar_series():
     if h1 is None or d1 is None:
         raise SystemExit("No se pudieron obtener datos de precio (Yahoo y Stooq fallaron). Intenta mas tarde.")
     if sym == "GC=F":
-        nota = "Fuente: futuros GC=F (Yahoo no entrego spot XAUUSD=X). Puede diferir unos dolares del spot."
+        nota = "Fuente: futuros GC=F (Binance no respondio). NO es el precio de tu broker: puede ir decenas de dolares arriba del spot."
     h4 = resample(h1, 4 * 3600)
     return h1, h4, d1, sym, nota
 
@@ -895,27 +904,39 @@ def _oro_cerrado(ts):
     wd = t.weekday()
     return wd == 5 or (wd == 4 and t.hour >= 16) or (wd == 6 and t.hour < 17)
 
-def binance_15m(dias=60):
-    """Velas de 15 min de PAXG/USDT (Binance): sigue al oro SPOT con ~$1-5 de diferencia,
-    a diferencia de los futuros GC=F (decenas de dolares). Quita las horas en que el oro no cotiza."""
+def binance_klines(interval="15m", dias=60):
+    """Velas de PAXG/USDT (Binance): sigue al oro SPOT con ~$1-5 de diferencia, a diferencia de
+    los futuros GC=F (decenas de dolares). Quita las horas/dias en que el oro no cotiza."""
     fin = int(time.time() * 1000)
     ini = fin - dias * 86400 * 1000
     out = {}
     end = fin
-    for _ in range(12):
-        url = f"https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=15m&limit=1000&endTime={end}"
-        ks = json.loads(http(url, timeout=20))
+    for _ in range(25):
+        q = f"/api/v3/klines?symbol=PAXGUSDT&interval={interval}&limit=1000&endTime={end}"
+        # data-api.binance.vision es el espejo publico de datos de mercado (no lo bloquean en EE.UU.,
+        # donde corren los servidores de GitHub); api.binance.com de respaldo.
+        try:
+            ks = json.loads(http("https://data-api.binance.vision" + q, timeout=20))
+        except Exception:
+            ks = json.loads(http("https://api.binance.com" + q, timeout=20))
         if not ks:
             break
         for k in ks:
             ts = int(k[0] // 1000)
-            if not _oro_cerrado(ts):
+            if interval == "1d":
+                cerrado = datetime.fromtimestamp(ts, timezone.utc).weekday() >= 5  # sabado y domingo
+            else:
+                cerrado = _oro_cerrado(ts)
+            if not cerrado:
                 out[ts] = (ts, float(k[1]), float(k[2]), float(k[3]), float(k[4]))
         end = int(ks[0][0]) - 1
         if end < ini:
             break
     bars = [out[k] for k in sorted(out) if k * 1000 >= ini]
     return bars if len(bars) > 200 else None
+
+def binance_15m(dias=60):
+    return binance_klines("15m", dias)
 
 def cargar_15m():
     """Barras de 15 min en precio SPOT (PAXG de Binance), que es lo que muestra el broker
@@ -1052,7 +1073,7 @@ def cmd_escenarios15(a):
     if sym == "GC=F":
         print("Aviso: futuros GC=F (Binance no respondio); NO es el precio de tu broker: puede diferir decenas de dolares del spot.")
     else:
-        print(f"Precios SPOT (PAXG de Binance, ~$1-5 del XAU/USD de tu broker). Niveles de dia previo/Asia pasados de futuros a spot (diferencia {fmt(E.get('basis_futuros_spot'))}).")
+        print("Precios SPOT (PAXG de Binance, ~$1-5 del XAU/USD de tu broker)." + (f" Niveles de dia previo/Asia ajustados a spot (diferencia {fmt(E.get('basis_futuros_spot'))})." if abs(E.get('basis_futuros_spot') or 0) > 3 else ""))
     if E["no_operar"]:
         print("CONDICIONES PARA NO OPERAR:")
         for x in E["no_operar"]:
@@ -1267,7 +1288,7 @@ function show(p,src){
  box.appendChild(document.createTextNode('Spot en vivo '));
  var b=document.createElement('b');b.className=c;b.textContent=p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});box.appendChild(b);
  var s=document.createElement('span');s.className='mut';s.id='vivo-t';s.textContent=' ('+src+', ahora)';box.appendChild(s);
- if(fgc){var w=document.createElement('div');w.className='mut';w.textContent='La vista 15m y sus escenarios R/P estan en spot (como tu broker). Las vistas 4H/Diario y los escenarios A/B/C usan futuros GC=F, que pueden ir decenas de dolares arriba.';box.appendChild(w);}
+ if(fgc){var w=document.createElement('div');w.className='mut';w.textContent='Ojo: Binance no respondio y las graficas y escenarios estan en futuros GC=F, que pueden ir decenas de dolares arriba de este spot. No los compares directo con tu broker.';box.appendChild(w);}
 }
 function tick(){
  fetch('https://api.gold-api.com/price/XAU',{cache:'no-store'}).then(function(r){return r.json();}).then(function(j){
