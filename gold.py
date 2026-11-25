@@ -905,6 +905,7 @@ button.ver{margin-top:8px;background:var(--card);color:var(--gold);border:1px so
 table.k{width:100%;border-collapse:collapse;font-size:.85rem}table.k td{padding:2px 0}table.k td:last-child{text-align:right}
 .warnbox{background:var(--warnbg);border:1px solid var(--dn);color:var(--dn);border-radius:10px;padding:10px 14px;margin-bottom:12px}
 .warnbox ul{margin:4px 0 0 18px;padding:0}
+.analista{border:2px solid var(--gold)}.analista p{margin:6px 0}.analista .mt0{margin-top:2px}.analista ul{margin:4px 0 8px 18px;padding:0}.analista .head{margin-bottom:6px}
 .vivo{margin-top:6px;font-size:.9rem;font-variant-numeric:tabular-nums}.vivo b{font-size:1.05rem}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:middle}
 ul.l{list-style:none;margin:0;padding:0}ul.l li{padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}ul.l li:last-child{border:0}
@@ -1185,9 +1186,50 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
     data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "escs": escs, "atr": t["4h"]["atr14"],
             "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M")}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    head += tarjeta_analista()
     page = (DASH_HTML.replace("__HEADER__", head).replace("__KPIS__", kp).replace("__ESC__", s).replace("__EVENTOS__", evh)
             .replace("__NOTICIAS__", nh).replace("__FUENTE__", esc(fuente)).replace("__DATA__", js))
     return page
+
+def tarjeta_analista():
+    """Tarjeta 'Lectura del analista' a partir de analisis.json (lo escribe el agente analista-oro
+    en la carpeta actual). Si no existe o esta mal formado, no se muestra nada."""
+    from pathlib import Path
+    import html
+    esc = lambda s: html.escape(str(s), quote=True)
+    try:
+        A = json.loads((Path.cwd() / "analisis.json").read_text(encoding="utf-8"))
+        gen = datetime.strptime(A["generado_gdl"], "%Y-%m-%d %H:%M").replace(tzinfo=GDL)
+    except Exception:
+        return ""
+    horas = (datetime.now(GDL) - gen).total_seconds() / 3600
+    def lista(k):
+        v = [x for x in (A.get(k) or []) if isinstance(x, str) and x.strip()]
+        return "<ul>" + "".join(f"<li>{esc(x)}</li>" for x in v) + "</ul>" if v else ""
+    sesgo = str(A.get("sesgo", "")).lower()
+    bcls = "alcista" if sesgo == "alcista" else "bajista" if sesgo == "bajista" else ""
+    viejo = (f"<div class='warnbox'>Esta lectura es de hace {horas:.0f} h; el mercado pudo cambiar. "
+             f"Pidele al agente una nueva.</div>") if horas > 6 else ""
+    pref = esc(str(A.get("escenario_preferido", "ninguno")))
+    fuentes = ""
+    fs = [f for f in (A.get("fuentes") or []) if isinstance(f, dict)]
+    if fs:
+        items = []
+        for f in fs[:6]:
+            u, m = str(f.get("url", "")), esc(str(f.get("medio", "fuente")))
+            items.append(f"<a href='{esc(u)}' target='_blank' rel='noopener noreferrer'>{m}</a>" if u.startswith("https://") else m)
+        fuentes = "<div class='mut'>Fuentes: " + " | ".join(items) + "</div>"
+    return (f"<div class='card analista'><h2>Lectura del analista</h2>{viejo}"
+            f"<div class='head'><div><span class='badge {bcls}'>Sesgo {esc(sesgo or 'n/d')}</span> "
+            f"<span class='chip'>confianza {esc(str(A.get('confianza', 'n/d')))}</span> "
+            f"<span class='chip'>escenario con mas respaldo: {pref}</span></div>"
+            f"<div class='mut'>{esc(A['generado_gdl'])} hora Guadalajara</div></div>"
+            f"<p>{esc(str(A.get('resumen', '')))}</p>"
+            f"<div><b>Lo mas probable</b><p class='mt0'>{esc(str(A.get('lo_mas_probable', '')))}</p></div>"
+            f"<div><b>Por que</b>{lista('por_que')}</div>"
+            f"<div><b>Que lo invalidaria</b><p class='mt0'>{esc(str(A.get('que_lo_invalida', '')))}</p></div>"
+            + (f"<div><b>Correcciones a la pagina</b>{lista('correcciones')}</div>" if A.get("correcciones") else "")
+            + f"{fuentes}<div class='mut'>Lectura de un modelo de IA con datos publicos. No es una recomendacion; la decision es tuya.</div></div>")
 
 def cmd_dashboard(a):
     t, (h1, h4, d1) = tecnico_data()
