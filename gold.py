@@ -1104,8 +1104,8 @@ __KPIS__
 <div class="legend" id="nivlist"></div>
 <div class="legend" id="ult"></div>
 <div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado (la vista 15m solo trae EMA20 y EMA50 y sus propios escenarios R/P). Lineas solidas: el escenario destacado, que solo cuenta si se cumple su disparador (entrada dorada, stop rojo, objetivo verde); el % es la probabilidad simulada de tocar ese nivel primero, no un pronostico. Punteadas grises: niveles cercanos (boton Niveles para ocultarlos). Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
-__ESC__
 __ESC15__
+__ESC__
 __EVENTOS__
 __NOTICIAS__
 <footer>Solo analisis, no es una recomendacion de inversion. La decision de operar, el tamano y el riesgo son tuyos. Operar oro con apalancamiento puede perder mas que el deposito. __FUENTE__</footer>
@@ -1204,7 +1204,7 @@ document.getElementById('bn').onclick=function(){nivOn=!nivOn;draw();};
 document.getElementById('b4').onclick=function(){setTF('h4');};
 document.getElementById('bd').onclick=function(){setTF('d');};
 (function(){var b=document.getElementById('b15');if(!b)return;if(!D.m15){b.hidden=true;return;}b.onclick=function(){setTF('m15');};})();
-setTF('h4');
+setTF(D.m15?'m15':'h4');
 function theme(){chart.applyOptions({layout:{background:{color:css('--card')},textColor:css('--ink')},grid:{vertLines:{color:css('--chart-grid')},horzLines:{color:css('--chart-grid')}}});}
 try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',theme);}catch(e){}
 window.addEventListener('resize',function(){chart.applyOptions({width:el.clientWidth});});
