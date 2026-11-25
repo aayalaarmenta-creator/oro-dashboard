@@ -972,7 +972,7 @@ def escenarios15_data(t, m15, h1, h4, d1, ev, now, rutas=3000, dias=1):
     n = t["niveles"]
     # Los niveles del dia previo y de Asia vienen de futuros (GC=F); las velas de 15 min son spot.
     # Se pasan a spot restando la diferencia actual futuros - spot (~0 si las velas tambien son GC=F).
-    basis = (t["precio"] - precio) if t.get("precio") else 0.0
+    basis = (t["precio"] - precio) if (t.get("precio") and t.get("simbolo") != "PAXG") else 0.0
     cands = []
     for k, nom in (("max_dia_previo", "maximo del dia previo"), ("min_dia_previo", "minimo del dia previo"),
                    ("max_asia", "maximo asiatico"), ("min_asia", "minimo asiatico")):
