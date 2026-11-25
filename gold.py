@@ -748,8 +748,11 @@ def escenarios_data(t, h1, h4, d1, ev, now, rutas=3000, dias=5):
     dire, why = dir_tendencia(t)
     cands = candidatos_niveles(t, atr)
     minimo = 0.25 * atr
-    sop = [c for c in cands if c[1] <= p - minimo]
-    res = [c for c in cands if c[1] >= p + minimo]
+    # Los niveles se eligen con el cierre de la ultima vela 4H YA CERRADA, no con el precio en vivo:
+    # asi los escenarios solo cambian cada 4 h y no brincan con movimientos de unos dolares.
+    base = h4[-2][4] if len(h4) > 1 else p
+    sop = [c for c in cands if c[1] <= base - minimo]
+    res = [c for c in cands if c[1] >= base + minimo]
     S = max(sop, key=lambda c: c[1]) if sop else None
     R = min(res, key=lambda c: c[1]) if res else None
     stop_d = 1.5 * atr
@@ -814,7 +817,8 @@ def escenarios_data(t, h1, h4, d1, ev, now, rutas=3000, dias=5):
     a4 = [x for x in atr_series(h4) if x is not None][-50:]
     if a4 and atr > 1.5 * (sum(a4) / len(a4)):
         no.append(f"ATR 4H inusualmente alto ({fmt(atr)} vs promedio 50 barras {fmt(sum(a4) / len(a4))}): mercado muy volatil.")
-    return {"generado_gdl": nowg.strftime("%Y-%m-%d %H:%M"), "precio": p, "atr4h": atr, "tendencia": dire, "tendencia_razon": why,
+    bh = datetime.fromtimestamp(h4[-2][0] + 4 * 3600, GDL).strftime("%H:%M") if len(h4) > 1 else ""
+    return {"generado_gdl": nowg.strftime("%Y-%m-%d %H:%M"), "base_cierre_4h": base, "base_hora_gdl": bh, "precio": p, "atr4h": atr, "tendencia": dire, "tendencia_razon": why,
             "rsi_diario": rsi_d, "rsi_4h": rsi_4, "soporte": S, "resistencia": R, "cuenta_configurada": bool(cuenta),
             "no_operar": no, "escenarios": esc}
 
@@ -1097,7 +1101,7 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
     kp += "</div>"
     # escenarios
     s = "<div class='card'><h2>Escenarios condicionales</h2>"
-    s += f"<div class='mut'>Tendencia {esc(E['tendencia'])} ({esc(E['tendencia_razon'])}). Simulacion: Montecarlo y repeticion historica, {E['escenarios'][0]['simulacion']['dias'] if E['escenarios'] else 5} dias.</div>"
+    s += f"<div class='mut'>Tendencia {esc(E['tendencia'])} ({esc(E['tendencia_razon'])}). Niveles calculados con el cierre 4H de las {esc(E.get('base_hora_gdl',''))} ({fmt(E.get('base_cierre_4h'))}); cambian cuando cierra la siguiente vela. Simulacion: Montecarlo y repeticion historica, {E['escenarios'][0]['simulacion']['dias'] if E['escenarios'] else 5} dias.</div>"
     if E["no_operar"]:
         s += "<div class='warnbox'><b>Condiciones para NO operar</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in E["no_operar"]) + "</ul></div>"
     s += "<div class='grid'>"
