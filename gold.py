@@ -466,11 +466,11 @@ def sim_resultado(direccion, entry, stop, target, bars_fwd):
     cl = bars_fwd[-1][2]
     return "N", ((cl - entry) if long else (entry - cl)) / riesgo
 
-def simula_plan(plan, h1, h4, d1, barra, dias, rutas, semilla):
+def simula_plan(plan, h1, h4, d1, barra, dias, rutas, semilla, m15=None):
     """Montecarlo (bootstrap) + repeticion historica. plan: direccion, entrada, stop, objetivo,
     riesgo_usd_por_oz, recompensa_usd_por_oz, atr14, atr_tf. Devuelve (mc, hist, n_barras)."""
-    base = h4 if barra == "4h" else h1
-    por_dia = 6 if barra == "4h" else 23
+    base = m15 if barra == "15m" else h4 if barra == "4h" else h1
+    por_dia = 92 if barra == "15m" else 6 if barra == "4h" else 23
     n = dias * por_dia
     d, e, s, t = plan["direccion"], plan["entrada"], plan["stop"], plan["objetivo"]
     rng = random.Random(semilla)
@@ -487,8 +487,12 @@ def simula_plan(plan, h1, h4, d1, barra, dias, rutas, semilla):
         elif o == "S": cS += 1
         else: cN += 1
     mc = {"objetivo_primero_pct": cT / rutas * 100, "stop_primero_pct": cS / rutas * 100, "ninguno_pct": cN / rutas * 100, "r_promedio": sumR / rutas}
-    serie = d1 if plan["atr_tf"] == "1d" else h4
-    sper = 86400 if plan["atr_tf"] == "1d" else 4 * 3600
+    if plan["atr_tf"] == "15m":
+        serie, sper = m15, 900
+    elif plan["atr_tf"] == "1d":
+        serie, sper = d1, 86400
+    else:
+        serie, sper = h4, 4 * 3600
     atrs = atr_series(serie); starts = [b[0] for b in serie]
     k_s = plan["riesgo_usd_por_oz"] / plan["atr14"]
     k_t = plan["recompensa_usd_por_oz"] / plan["atr14"]
@@ -536,6 +540,25 @@ def cmd_timemachine(a):
     print("Veredicto:", v)
     print("Nota: si objetivo y stop caen en la misma barra se cuenta el stop. Es una simulacion, no una prediccion.")
 
+OZ_LOTE = {"standard": 100.0, "cent": 1.0}  # onzas por lote segun el tipo de cuenta
+NOTA_CENT = "Cuenta cent: aqui 1 lote = 1 oz; verifica el tamano de contrato con tu broker."
+
+def tipo_cuenta(cfg):
+    t = (cfg or {}).get("tipo_cuenta") or "standard"
+    return t if t in OZ_LOTE else "standard"
+
+def lotes_para(cuenta, rp, dist, tipo):
+    """Lotes (minimo 0.01) que caben en el riesgo; rechaza si ni el lote minimo cabe."""
+    oz = OZ_LOTE[tipo]
+    riesgo_usd = cuenta * rp / 100
+    perd_lote = dist * oz
+    lotes = math.floor(riesgo_usd / perd_lote * 100 + 1e-9) / 100
+    if lotes < 0.01:
+        return {"rechazado": True, "tipo_cuenta": tipo,
+                "nota": f"con ${fmt(riesgo_usd)} de riesgo no alcanza el lote minimo 0.01 (arriesgaria ${fmt(0.01 * perd_lote)} por 0.01 lote)"}
+    return {"rechazado": False, "lotes": lotes, "onzas": round(lotes * oz, 2), "tipo_cuenta": tipo,
+            "perdida_en_stop_usd": round(lotes * perd_lote, 2)}
+
 def cmd_tamano(a):
     cfg = load("config.json") or {}
     if a.cuenta is not None:
@@ -544,25 +567,34 @@ def cmd_tamano(a):
         cfg["riesgo_pct"] = a.riesgo
     if a.tope_dia is not None:
         cfg["tope_diario_pct"] = a.tope_dia
-    cfg.setdefault("riesgo_pct", 1.0); cfg.setdefault("tope_diario_pct", 3.0)
+    if a.tipo is not None:
+        cfg["tipo_cuenta"] = a.tipo
+    cfg.setdefault("riesgo_pct", 1.0); cfg.setdefault("tope_diario_pct", 3.0); cfg.setdefault("tipo_cuenta", "standard")
+    tipo = tipo_cuenta(cfg)
     if not cfg.get("cuenta_usd"):
         print("FALTA_CUENTA: necesito el tamano de tu cuenta en USD. Corre: tamano --cuenta 5000")
         sys.exit(2)
     save("config.json", cfg)
+    if a.dist is None and not load("plan.json"):
+        if a.cuenta is not None or a.tipo is not None or a.riesgo is not None or a.tope_dia is not None:
+            print(f"CONFIGURACION GUARDADA: cuenta ${fmt(cfg['cuenta_usd'],0)} | tipo {tipo} | riesgo {cfg['riesgo_pct']}% | tope diario {cfg['tope_diario_pct']}%")
+            print("  " + (NOTA_CENT if tipo == "cent" else "Cuenta standard: 1 lote = 100 oz; lote minimo 0.01 (= 1 oz)."))
+            print("  Los lotes de los escenarios (4H y 15m) usaran esta configuracion.")
+            return
+        raise SystemExit("No hay plan.json ni --dist. Primero corre: plan --dir largo|corto")
     if a.dist is not None:
         dist = a.dist; src = "distancia dada"
     else:
         plan = load("plan.json")
-        if not plan:
-            raise SystemExit("No hay plan.json ni --dist. Primero corre: plan --dir largo|corto")
         dist = plan["riesgo_usd_por_oz"]; src = "plan.json"
     cuenta, rp = cfg["cuenta_usd"], cfg["riesgo_pct"]
     riesgo_usd = cuenta * rp / 100
-    perd_lote = dist * 100  # 1 lote = 100 oz
+    oz_lote = OZ_LOTE[tipo]
+    perd_lote = dist * oz_lote
     lotes = math.floor(riesgo_usd / perd_lote * 100 + 1e-9) / 100
     tope_usd = cuenta * cfg["tope_diario_pct"] / 100
     res = {"cuenta_usd": cuenta, "riesgo_pct": rp, "riesgo_usd": round(riesgo_usd, 2), "tope_diario_pct": cfg["tope_diario_pct"],
-           "tope_diario_usd": round(tope_usd, 2), "distancia_stop_usd_oz": dist, "origen_distancia": src, "lotes": lotes,
+           "tope_diario_usd": round(tope_usd, 2), "distancia_stop_usd_oz": dist, "origen_distancia": src, "lotes": lotes, "tipo_cuenta": tipo,
            "generado_gdl": datetime.now(GDL).strftime("%Y-%m-%d %H:%M")}
     if lotes < 0.01:
         min_r = 0.01 * perd_lote
@@ -572,18 +604,21 @@ def cmd_tamano(a):
         print(f"El lote minimo arriesgaria ${fmt(min_r)} ({min_r/cuenta*100:.2f}% de la cuenta). No se ajusta el riesgo a escondidas: reduce el stop, sube la cuenta o decide tu mismo.")
         sys.exit(1)
     real = lotes * perd_lote
-    res.update({"perdida_real_en_stop_usd": round(real, 2), "perdida_real_pct": round(real / cuenta * 100, 3), "onzas": round(lotes * 100, 2),
+    res.update({"perdida_real_en_stop_usd": round(real, 2), "perdida_real_pct": round(real / cuenta * 100, 3), "onzas": round(lotes * oz_lote, 2),
                 "operaciones_hasta_tope": int(tope_usd // real) if real else None, "rechazado": False})
     plan = load("plan.json")
     if plan and a.dist is None:
-        res["ganancia_en_objetivo_usd"] = round(lotes * 100 * plan["recompensa_usd_por_oz"], 2)
+        res["ganancia_en_objetivo_usd"] = round(lotes * oz_lote * plan["recompensa_usd_por_oz"], 2)
     save("size.json", res)
-    print(f"TAMANO: {lotes:.2f} lotes ({res['onzas']:.0f} oz)  | cuenta ${fmt(cuenta,0)}, riesgo {rp}% = ${fmt(riesgo_usd)}")
+    print(f"TAMANO: {lotes:.2f} lotes ({res['onzas']:g} oz, cuenta {tipo})  | cuenta ${fmt(cuenta,0)}, riesgo {rp}% = ${fmt(riesgo_usd)}")
     print(f"  Stop ${fmt(dist)}/oz ({src}) -> perdida en el stop ${fmt(real)} ({res['perdida_real_pct']:.2f}% de la cuenta)")
     if "ganancia_en_objetivo_usd" in res:
         print(f"  Ganancia en el objetivo: ${fmt(res['ganancia_en_objetivo_usd'])}")
     print(f"  Tope diario {cfg['tope_diario_pct']}% = ${fmt(tope_usd)} (~{res['operaciones_hasta_tope']} perdidas completas); al llegar, deja de operar el dia.")
-    print("  Referencia: 1 lote = 100 oz; mover $1 con 0.01 lote = $1. Revisa el margen de tu broker. La decision es tuya.")
+    if tipo == "cent":
+        print("  " + NOTA_CENT + " Revisa el margen de tu broker. La decision es tuya.")
+    else:
+        print("  Referencia: 1 lote = 100 oz; mover $1 con 0.01 lote = $1. Revisa el margen de tu broker. La decision es tuya.")
 
 # ---------- noticias ----------
 FEEDS = [
@@ -790,12 +825,7 @@ def escenarios_data(t, h1, h4, d1, ev, now, rutas=3000, dias=5):
         r, v = veredicto_sim(mc, hist)
         e["simulacion"] = {"montecarlo": mc, "historico": hist, "r_promedio": r, "veredicto": v, "rutas": rutas, "dias": dias}
         if cuenta:
-            riesgo_usd = cuenta * rp / 100
-            lotes = math.floor(riesgo_usd / (e["riesgo_usd_oz"] * 100) * 100 + 1e-9) / 100
-            if lotes < 0.01:
-                e["lotes"] = {"rechazado": True, "nota": f"con ${fmt(riesgo_usd)} de riesgo no alcanza el lote minimo 0.01 (arriesgaria ${fmt(e['riesgo_usd_oz'] * 1)} por 0.01 lote)"}
-            else:
-                e["lotes"] = {"rechazado": False, "lotes": lotes, "perdida_en_stop_usd": round(lotes * e["riesgo_usd_oz"] * 100, 2)}
+            e["lotes"] = lotes_para(cuenta, rp, e["riesgo_usd_oz"], tipo_cuenta(cfg))
     if esc:
         esc.sort(key=lambda e: e["simulacion"]["r_promedio"], reverse=True)
         esc[0]["mejor"] = True
@@ -819,7 +849,7 @@ def escenarios_data(t, h1, h4, d1, ev, now, rutas=3000, dias=5):
         no.append(f"ATR 4H inusualmente alto ({fmt(atr)} vs promedio 50 barras {fmt(sum(a4) / len(a4))}): mercado muy volatil.")
     bh = datetime.fromtimestamp(h4[-2][0] + 4 * 3600, GDL).strftime("%H:%M") if len(h4) > 1 else ""
     return {"generado_gdl": nowg.strftime("%Y-%m-%d %H:%M"), "base_cierre_4h": base, "base_hora_gdl": bh, "precio": p, "atr4h": atr, "tendencia": dire, "tendencia_razon": why,
-            "rsi_diario": rsi_d, "rsi_4h": rsi_4, "soporte": S, "resistencia": R, "cuenta_configurada": bool(cuenta),
+            "rsi_diario": rsi_d, "rsi_4h": rsi_4, "soporte": S, "resistencia": R, "cuenta_configurada": bool(cuenta), "tipo_cuenta": tipo_cuenta(cfg),
             "no_operar": no, "escenarios": esc}
 
 def cmd_escenarios(a):
@@ -853,8 +883,160 @@ def cmd_escenarios(a):
         if e["contra_tendencia"]:
             print("  OJO: contra tendencia, mas riesgo.")
     if not E["cuenta_configurada"]:
-        print("\n(Sin cuenta en config.json: no se calcularon lotes. Usa: tamano --cuenta 5000)")
+        print("\n(Sin cuenta en config.json: no se calcularon lotes. Usa: tamano --cuenta 5000 --tipo standard|cent)")
+    elif E.get("tipo_cuenta") == "cent":
+        print("\n" + NOTA_CENT)
     print("\nSon escenarios condicionales, no recomendaciones. La decision es tuya.")
+
+# ---------- escenarios 15 min ----------
+def cargar_15m():
+    """Barras de 15 min (GC=F). Prueba 60d y, si falla, 30d. Se normalizan a multiplos de 15 min
+    (Yahoo a veces trae la vela en curso con una marca de tiempo intermedia)."""
+    for rng in ("60d", "30d"):
+        b, sym = get_gold("15m", rng)
+        if b:
+            return resample(sorted(b), 900), sym
+    return None, None
+
+def escenarios15_data(t, m15, h1, h4, d1, ev, now, rutas=3000, dias=1):
+    """Escenarios de 15 min, solo a favor de la tendencia 4H/diario. Niveles calculados con el
+    cierre de la ultima vela de 15 min YA CERRADA (no con el precio en vivo)."""
+    now_ts = now.timestamp()
+    cerr = [b for b in m15 if b[0] + 900 <= now_ts]
+    if len(cerr) < 60:
+        raise SystemExit("Pocas velas de 15 min cerradas para calcular escenarios.")
+    ult = cerr[-1]
+    base = ult[4]
+    cierre_ts = ult[0] + 900
+    precio = m15[-1][4]
+    cl = [b[4] for b in cerr]
+    atrs = atr_series(cerr)
+    atr = atrs[-1]
+    e20, e50 = ema(cl, 20), ema(cl, 50)
+    dire, why = dir_tendencia(t)
+    n = t["niveles"]
+    cands = []
+    for k, nom in (("max_dia_previo", "maximo del dia previo"), ("min_dia_previo", "minimo del dia previo"),
+                   ("max_asia", "maximo asiatico"), ("min_asia", "minimo asiatico")):
+        if n.get(k) is not None:
+            cands.append((nom, n[k]))
+    sw = cerr[-16:]
+    cands.append(("maximo de las ultimas 16 velas 15m", max(b[2] for b in sw)))
+    cands.append(("minimo de las ultimas 16 velas 15m", min(b[3] for b in sw)))
+    v = math.floor((base - 4 * atr) / 25) * 25
+    while v <= base + 4 * atr:
+        if base - 4 * atr <= v:
+            cands.append((f"redondo ${v:,.0f}", float(v)))
+        v += 25
+    minimo = 0.25 * atr
+    sop = [c for c in cands if c[1] <= base - minimo]
+    res = [c for c in cands if c[1] >= base + minimo]
+    S = max(sop, key=lambda c: c[1]) if sop else None
+    R = min(res, key=lambda c: c[1]) if res else None
+    stop_d = round(max(1.5 * atr + 0.40, 3.0), 2)
+    esc = []
+    def nuevo(id_, nombre, d, nivel, disp):
+        e = round(nivel[1], 2)
+        stop = e - stop_d if d == "largo" else e + stop_d
+        obj = e + 2 * stop_d if d == "largo" else e - 2 * stop_d
+        return {"id": id_, "nombre": nombre, "direccion": d, "nivel": nivel[0], "disparador": disp,
+                "entrada": e, "stop": round(stop, 2), "objetivo": round(obj, 2), "r_multiplo": 2.0,
+                "riesgo_usd_oz": stop_d, "distancia_precio": round(e - precio, 2),
+                "contra_tendencia": False, "tf": "15m"}
+    if dire == "bajista":
+        if S:
+            esc.append(nuevo("R", "Corto por ruptura 15m", "corto", S, f"Una vela de 15 min CIERRA por debajo de {fmt(S[1])} ({S[0]})"))
+        if R:
+            esc.append(nuevo("P", "Corto si rechaza 15m", "corto", R, f"El precio sube a {fmt(R[1])} ({R[0]}) y una vela de 15 min cierra de nuevo por debajo"))
+    else:
+        if R:
+            esc.append(nuevo("R", "Largo por ruptura 15m", "largo", R, f"Una vela de 15 min CIERRA por encima de {fmt(R[1])} ({R[0]})"))
+        if S:
+            esc.append(nuevo("P", "Largo si rechaza 15m", "largo", S, f"El precio baja a {fmt(S[1])} ({S[0]}) y una vela de 15 min cierra de nuevo por encima"))
+    cfg = load("config.json") or {}
+    cuenta = cfg.get("cuenta_usd"); rp = cfg.get("riesgo_pct", 1.0)
+    for e in esc:
+        plan = {"direccion": e["direccion"], "entrada": e["entrada"], "stop": e["stop"], "objetivo": e["objetivo"],
+                "riesgo_usd_por_oz": stop_d, "recompensa_usd_por_oz": round(2 * stop_d, 2), "atr14": atr, "atr_tf": "15m"}
+        mc, hist, nb = simula_plan(plan, h1, h4, d1, "15m", dias, rutas, 19, m15=cerr)
+        r, vd = veredicto_sim(mc, hist)
+        e["simulacion"] = {"montecarlo": mc, "historico": hist, "r_promedio": r, "veredicto": vd, "rutas": rutas, "dias": dias, "barras": nb}
+        if cuenta:
+            e["lotes"] = lotes_para(cuenta, rp, stop_d, tipo_cuenta(cfg))
+    if esc:
+        esc.sort(key=lambda e: e["simulacion"]["r_promedio"], reverse=True)
+        esc[0]["mejor"] = True
+    # no operar
+    no = []
+    ab, txt = mercado_abierto(now)
+    if not ab:
+        no.append(f"Mercado {txt}.")
+    elif now_ts - cierre_ts > 45 * 60:
+        no.append(f"Datos de 15 min desfasados: la ultima vela cerrada es de las {datetime.fromtimestamp(cierre_ts, GDL):%H:%M} GDL.")
+    nowg = now.astimezone(GDL)
+    for x in ev or []:
+        try:
+            et = datetime.strptime(x["cuando_gdl"], "%Y-%m-%d %H:%M").replace(tzinfo=GDL)
+        except Exception:
+            continue
+        dt = (et - nowg).total_seconds()
+        if x.get("impacto") == "High" and -900 <= dt <= 1800:
+            no.append(f"Evento USD de alto impacto {'en menos de 30 min' if dt >= 0 else 'hace menos de 15 min'}: {x['evento']} a las {et:%H:%M} GDL.")
+    if nowg.hour < 1 or nowg.hour >= 13:
+        no.append("Fuera de Londres/Nueva York (01:00-13:00 GDL): poco volumen.")
+    if nowg.weekday() == 4 and nowg.hour >= 13:
+        no.append("Viernes despues de las 13:00 GDL: liquidez baja y cierre semanal cerca.")
+    a50 = [x for x in atrs if x is not None][-50:]
+    if a50 and atr > 2 * (sum(a50) / len(a50)):
+        no.append(f"Volatilidad anormal: ATR 15m {fmt(atr)} vs promedio de 50 barras {fmt(sum(a50) / len(a50))}.")
+    cierre_dt = datetime.fromtimestamp(cierre_ts, timezone.utc)
+    return {"generado_gdl": nowg.strftime("%Y-%m-%d %H:%M"), "generado_iso": now.isoformat(),
+            "base_cierre_15m": base, "base_hora_gdl": cierre_dt.astimezone(GDL).strftime("%H:%M"),
+            "base_iso": cierre_dt.isoformat(), "base_gdl": cierre_dt.astimezone(GDL).strftime("%Y-%m-%d %H:%M"),
+            "ultima_vela_cerrada_ts": ult[0], "ultima_vela_cerrada_iso": datetime.fromtimestamp(ult[0], timezone.utc).isoformat(),
+            "ultima_vela_cerrada_gdl": datetime.fromtimestamp(ult[0], GDL).strftime("%Y-%m-%d %H:%M"),
+            "swing16": [max(b[2] for b in sw), min(b[3] for b in sw)], "precio": precio, "atr15": atr, "ema20_15m": e20, "ema50_15m": e50, "tendencia": dire, "tendencia_razon": why,
+            "soporte": S, "resistencia": R, "cuenta_configurada": bool(cuenta), "tipo_cuenta": tipo_cuenta(cfg),
+            "no_operar": no, "escenarios": esc}
+
+def cmd_escenarios15(a):
+    t, (h1, h4, d1) = tecnico_data()
+    m15, sym = cargar_15m()
+    if not m15:
+        raise SystemExit("No se pudieron obtener velas de 15 min (Yahoo no respondio). Intenta mas tarde.")
+    now = datetime.now(timezone.utc)
+    ev, fuente = calendario(now)
+    E = escenarios15_data(t, m15, h1, h4, d1, ev, now, a.rutas, a.dias)
+    E["simbolo_15m"] = sym
+    save("escenarios15.json", E)
+    print(f"=== ESCENARIOS 15 MIN XAU/USD ({E['generado_gdl']} hora Guadalajara) ===")
+    print(f"Niveles calculados con el cierre 15m de las {E['base_hora_gdl']} ({fmt(E['base_cierre_15m'])}) | precio {fmt(E['precio'])} ({sym})")
+    print(f"ATR 15m {fmt(E['atr15'])} | EMA20 {fmt(E['ema20_15m'])} / EMA50 {fmt(E['ema50_15m'])} (15m) | tendencia {E['tendencia']} ({E['tendencia_razon']}); solo escenarios a favor de la tendencia")
+    if sym == "GC=F":
+        print("Aviso: futuros GC=F (Yahoo no entrego spot); puede diferir unos dolares del spot.")
+    if E["no_operar"]:
+        print("CONDICIONES PARA NO OPERAR:")
+        for x in E["no_operar"]:
+            print("  !", x)
+    if not E["escenarios"]:
+        print("No hay niveles utiles para armar escenarios.")
+    for e in E["escenarios"]:
+        s = e["simulacion"]; mc, h = s["montecarlo"], s["historico"]
+        tag = "  <- mejor balance segun la simulacion" if e.get("mejor") else ""
+        print(f"\n[{e['id']}] {e['nombre']} ({e['direccion']}){tag}")
+        print(f"  Disparador: {e['disparador']}")
+        print(f"  Entrada {fmt(e['entrada'])} | Stop {fmt(e['stop'])} | Objetivo {fmt(e['objetivo'])} | {e['r_multiplo']:.0f}R | riesgo ${fmt(e['riesgo_usd_oz'])}/oz (1.5 ATR + $0.40 de spread) | a {e['distancia_precio']:+.2f} del precio")
+        print(f"  Montecarlo ({s['rutas']:,} rutas, {s['barras']} velas 15m): objetivo {mc['objetivo_primero_pct']:.0f}% | stop {mc['stop_primero_pct']:.0f}% | ninguno {mc['ninguno_pct']:.0f}% | R {mc['r_promedio']:+.2f}")
+        print(f"  Historico ({h['casos']:,} casos): objetivo {h['objetivo_primero_pct']:.0f}% | stop {h['stop_primero_pct']:.0f}% | ninguno {h['ninguno_pct']:.0f}% | R {h['r_promedio']:+.2f}")
+        print(f"  R promedio {s['r_promedio']:+.2f}: {s['veredicto']}")
+        if "lotes" in e:
+            l = e["lotes"]
+            print("  Lotes: " + (f"RECHAZADO, {l['nota']}" if l["rechazado"] else f"{l['lotes']:.2f} (perdida en el stop ${fmt(l['perdida_en_stop_usd'])})"))
+    if not E["cuenta_configurada"]:
+        print("\n(Sin cuenta en config.json: no se calcularon lotes. Usa: tamano --cuenta 5000 --tipo standard|cent)")
+    elif E["tipo_cuenta"] == "cent":
+        print("\n" + NOTA_CENT)
+    print("\nVence en cuanto cierre la siguiente vela de 15 min. Son escenarios condicionales, no recomendaciones. La decision es tuya.")
 
 # ---------- dashboard ----------
 def sesion_activa(now):
@@ -917,12 +1099,13 @@ footer{font-size:.8rem;color:var(--mut);padding:8px 0 24px}
 __HEADER__
 __KPIS__
 <div class="card"><h2>Grafica</h2>
-<div class="btns"><button id="b4" class="on">4H</button> <button id="bd">Diario</button> <button id="bn" class="on">Niveles</button><span class="sep">Escenario:</span><span id="besc" class="btns"></span></div>
+<div class="btns"><button id="b15">15m</button> <button id="b4" class="on">4H</button> <button id="bd">Diario</button> <button id="bn" class="on">Niveles</button><span class="sep">Escenario:</span><span id="besc" class="btns"></span></div>
 <div id="chart"></div>
 <div class="legend" id="nivlist"></div>
 <div class="legend" id="ult"></div>
-<div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado. Lineas solidas: el escenario destacado, que solo cuenta si se cumple su disparador (entrada dorada, stop rojo, objetivo verde); el % es la probabilidad simulada de tocar ese nivel primero, no un pronostico. Punteadas grises: niveles cercanos (boton Niveles para ocultarlos). Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
+<div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado (la vista 15m solo trae EMA20 y EMA50 y sus propios escenarios R/P). Lineas solidas: el escenario destacado, que solo cuenta si se cumple su disparador (entrada dorada, stop rojo, objetivo verde); el % es la probabilidad simulada de tocar ese nivel primero, no un pronostico. Punteadas grises: niveles cercanos (boton Niveles para ocultarlos). Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
 __ESC__
+__ESC15__
 __EVENTOS__
 __NOTICIAS__
 <footer>Solo analisis, no es una recomendacion de inversion. La decision de operar, el tamano y el riesgo son tuyos. Operar oro con apalancamiento puede perder mas que el deposito. __FUENTE__</footer>
@@ -943,36 +1126,45 @@ var up=css('--up'),dn=css('--dn');
 var cs=chart.addCandlestickSeries({upColor:up,downColor:dn,borderUpColor:up,borderDownColor:dn,wickUpColor:up,wickDownColor:dn});
 var cols={ema20:'#3b82f6',ema50:'#f59e0b',ema200:'#8b5cf6'};
 var es={};['ema20','ema50','ema200'].forEach(function(k){es[k]=chart.addLineSeries({color:cols[k],lineWidth:1,priceLineVisible:false,lastValueVisible:false});});
-var lines=[];
+var cur='h4',escs=[],escP=[],sel=null,atr=D.atr||20,tol=1,ref=D.h4.velas[D.h4.velas.length-1].close,lineas=D.lineas||[],rango=3;
+var nivOn=true,drawn=[];
+function ordenar(a){var o='ABCRP';return (a||[]).slice().sort(function(x,y){return o.indexOf(x.id)-o.indexOf(y.id);});}
+function mejorDe(l){return ((l.filter(function(e){return e.mejor;})[0])||l[0]||{}).id;}
 function setTF(tf){
- var d=D[tf];cs.setData(d.velas);
- ['ema20','ema50','ema200'].forEach(function(k){es[k].setData(d[k]);});
- chart.applyOptions({timeScale:{timeVisible:tf==='h4'}});
- var nv=d.velas.length,vis=el.clientWidth<600?(tf==='h4'?45:60):(tf==='h4'?100:140);
+ var prev=cur;cur=tf;var d=D[tf];cs.setData(d.velas);
+ ['ema20','ema50','ema200'].forEach(function(k){es[k].setData(d[k]||[]);});
+ chart.applyOptions({timeScale:{timeVisible:tf!=='d'}});
+ var nv=d.velas.length,nar=el.clientWidth<600;
+ var vis=tf==='m15'?(nar?60:120):tf==='h4'?(nar?45:100):(nar?60:140);
  chart.timeScale().setVisibleLogicalRange({from:Math.max(0,nv-vis),to:nv+2});
  document.getElementById('b4').className=tf==='h4'?'on':'';
  document.getElementById('bd').className=tf==='d'?'on':'';
+ var b15=document.getElementById('b15');if(b15)b15.className=tf==='m15'?'on':'';
  var v=d.velas[d.velas.length-1],t=new Date(v.time*1000),p=function(n){return (n<10?'0':'')+n;};
  var u=document.getElementById('ult');
  if(tf==='h4'){var f=new Date((v.time+14400)*1000);
   u.textContent='Ultima vela 4H (en curso): abrio '+p(t.getUTCHours())+':00 y cierra '+p(f.getUTCHours())+':00. Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara).';}
+ else if(tf==='m15'){var f2=new Date((v.time+900)*1000);
+  u.textContent='Ultima vela 15m (en curso): abrio '+p(t.getUTCHours())+':'+p(t.getUTCMinutes())+' y cierra '+p(f2.getUTCHours())+':'+p(f2.getUTCMinutes())+'. Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara). Escenarios R/P calculados con la vela 15m ya cerrada.';}
  else{u.textContent='Ultima vela diaria (en curso). Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara).';}
+ if(tf==='m15'){escs=ordenar(D.escs15);atr=D.atr15||5;lineas=D.lineas15||[];rango=4;ref=v.close;}
+ else{escs=ordenar(D.escs);atr=D.atr||20;lineas=D.lineas||[];rango=3;ref=D.h4.velas[D.h4.velas.length-1].close;}
+ tol=Math.max(1,atr*0.15);
+ var mantiene=(prev==='m15')===(tf==='m15')&&escs.some(function(e){return e.id===sel;});
+ if(!mantiene)sel=mejorDe(escs);
+ buildBtns();draw();
 }
 // Lineas: el escenario elegido (entrada/stop/objetivo) con etiqueta en el eje; los niveles finos, sin
 // etiqueta en el eje, agrupados cuando quedan juntos y solo los cercanos al precio.
-var atr=D.atr||20,tol=Math.max(1,atr*0.15);
-var vel=D.h4.velas,ref=vel[vel.length-1].close;
-var escs=(D.escs||[]).slice().sort(function(x,y){return x.id<y.id?-1:1;}),escP=[],sel=((escs.filter(function(e){return e.mejor;})[0])||escs[0]||{}).id;
-var nivOn=true,drawn=[];
 function copia(l){return {precio:l.precio,titulo:l.titulo,tipo:l.tipo};}
 function draw(){
  drawn.forEach(function(p){cs.removePriceLine(p);});drawn=[];
  var e=escs.filter(function(x){return x.id===sel;})[0];
  var esc_=e?e.lineas.map(copia):[];escP=esc_.map(function(l){return l.precio;});
- var niv=D.lineas.filter(function(l){return l.tipo==='nivel';}).map(copia).filter(function(n){
+ var niv=lineas.filter(function(l){return l.tipo==='nivel';}).map(copia).filter(function(n){
   var s=esc_.filter(function(x){return Math.abs(x.precio-n.precio)<=tol;})[0];
   if(s){s.titulo+=' / '+n.titulo;return false;}
-  return Math.abs(n.precio-ref)<=atr*3;
+  return Math.abs(n.precio-ref)<=atr*rango;
  }).sort(function(a,b){return a.precio-b.precio;});
  var grp=[];niv.forEach(function(n){var g=grp[grp.length-1];
   if(g&&n.precio-g.precio<=tol){g.titulo+=' / '+n.titulo;}else{grp.push(n);}});
@@ -1001,20 +1193,29 @@ cs.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r||!escP.
  var lo=Math.min.apply(null,escP),hi=Math.max.apply(null,escP);
  r.priceRange.minValue=Math.min(r.priceRange.minValue,lo-atr*0.3);r.priceRange.maxValue=Math.max(r.priceRange.maxValue,hi+atr*0.3);return r;}});
 function elegir(id){sel=id;draw();}
-(function(){var cont=document.getElementById('besc');if(!cont)return;
+function buildBtns(){var cont=document.getElementById('besc');if(!cont)return;cont.textContent='';
  escs.forEach(function(e){var b=document.createElement('button');b.type='button';b.setAttribute('data-id',e.id);b.textContent=e.id;
-  b.title=e.nombre;b.onclick=function(){elegir(e.id);};cont.appendChild(b);});
- Array.prototype.forEach.call(document.querySelectorAll('button.ver'),function(b){b.onclick=function(){
-  elegir(b.getAttribute('data-ver'));document.getElementById('chart').scrollIntoView({behavior:'smooth',block:'center'});};});
-})();
-draw();
+  b.title=e.nombre;b.onclick=function(){elegir(e.id);};cont.appendChild(b);});}
+Array.prototype.forEach.call(document.querySelectorAll('button.ver'),function(b){b.onclick=function(){
+ var want=b.getAttribute('data-tf')==='m15'?'m15':'h4';
+ if((want==='m15')!==(cur==='m15'))setTF(want);
+ elegir(b.getAttribute('data-ver'));document.getElementById('chart').scrollIntoView({behavior:'smooth',block:'center'});};});
 document.getElementById('bn').onclick=function(){nivOn=!nivOn;draw();};
 document.getElementById('b4').onclick=function(){setTF('h4');};
 document.getElementById('bd').onclick=function(){setTF('d');};
+(function(){var b=document.getElementById('b15');if(!b)return;if(!D.m15){b.hidden=true;return;}b.onclick=function(){setTF('m15');};})();
 setTF('h4');
 function theme(){chart.applyOptions({layout:{background:{color:css('--card')},textColor:css('--ink')},grid:{vertLines:{color:css('--chart-grid')},horzLines:{color:css('--chart-grid')}}});}
 try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',theme);}catch(e){}
 window.addEventListener('resize',function(){chart.applyOptions({width:el.clientWidth});});
+})();
+(function(){
+// Aviso si los escenarios de 15 min ya estan viejos (la pagina publicada se regenera cada rato).
+var box=document.getElementById('e15-age');if(!box)return;
+var base=Date.parse(box.getAttribute('data-base'));if(!isFinite(base))return;
+function chk(){var m=Math.round((Date.now()-base)/60000);
+ if(m>30){box.hidden=false;box.textContent='Estos escenarios de 15 min ya tienen '+m+' min; usa /escenarios15 en el bot para los actuales.';}else{box.hidden=true;}}
+chk();setInterval(chk,60000);
 })();
 (function(){
 // Precio spot en vivo (gold-api.com; respaldo Binance PAXG). Si la red lo bloquea, no se muestra nada.
@@ -1057,13 +1258,14 @@ def _serie_velas(bars, daily=False):
     keys = sorted(vistos)
     return [vistos[k] for k in keys]
 
-def _chart_bloque(bars, n, daily=False):
+def _chart_bloque(bars, n, daily=False, periodos=(20, 50, 200)):
     cl = [b[4] for b in bars]
     out = {}
     sub = bars[-n:]
     velas = _serie_velas(sub, daily)
     times = [v["time"] for v in velas]
-    for k, per in (("ema20", 20), ("ema50", 50), ("ema200", 200)):
+    for per in periodos:
+        k = f"ema{per}"
         ser = ema_series(cl, per)[-len(sub):]
         # alinear con velas deduplicadas (mismo orden, misma longitud salvo duplicados)
         pts = []
@@ -1077,7 +1279,53 @@ def _chart_bloque(bars, n, daily=False):
     out["velas"] = velas
     return out
 
-def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
+def _bar(m):
+    return (f"<div class='bar'><i class='b-t' style='width:{m['objetivo_primero_pct']:.1f}%'></i><i class='b-s' style='width:{m['stop_primero_pct']:.1f}%'></i><i class='b-n' style='width:{m['ninguno_pct']:.1f}%'></i></div>"
+            f"<div class='mut'>objetivo {m['objetivo_primero_pct']:.0f}% | stop {m['stop_primero_pct']:.0f}% | ninguno {m['ninguno_pct']:.0f}% | R {m['r_promedio']:+.2f}</div>")
+
+def _card_esc(e, esc, tf):
+    sm = e["simulacion"]; mc = sm["montecarlo"]; h = sm["historico"]
+    tags = ""
+    if e.get("mejor"):
+        tags += "<div class='tag'>Mejor balance segun la simulacion</div>"
+    if e.get("contra_tendencia"):
+        tags += "<div class='tag warn'>Contra tendencia, mas riesgo</div>"
+    lot = ""
+    if "lotes" in e:
+        l = e["lotes"]
+        lot = f"<tr><td>Lotes</td><td>{esc(l['nota']) if l['rechazado'] else format(l['lotes'], '.2f') + ' (perdida en stop $' + fmt(l['perdida_en_stop_usd']) + ')'}</td></tr>"
+    return (f"<div class='esc{' best' if e.get('mejor') else ''}' data-esc='{esc(e['id'])}'><h3>[{esc(e['id'])}] {esc(e['nombre'])}</h3>{tags}"
+            f"<div class='mut'>{esc(e['disparador'])}</div>"
+            f"<table class='k'><tr><td>Entrada</td><td>{fmt(e['entrada'])}</td></tr><tr><td>Stop</td><td>{fmt(e['stop'])}</td></tr>"
+            f"<tr><td>Objetivo</td><td>{fmt(e['objetivo'])}</td></tr><tr><td>R</td><td>{e['r_multiplo']:.0f}R</td></tr>"
+            f"<tr><td>Riesgo por onza</td><td>${fmt(e['riesgo_usd_oz'])}</td></tr><tr><td>Distancia al precio</td><td>{e['distancia_precio']:+.2f}</td></tr>{lot}</table>"
+            f"<div class='mut' style='margin-top:6px'>Montecarlo</div>{_bar(mc)}<div class='mut'>Historico ({h['casos']:,} casos)</div>{_bar(h)}"
+            f"<div class='mut'>{esc(sm['veredicto'])} (R prom. {sm['r_promedio']:+.2f})</div>"
+            f"<button class='ver' type='button' data-ver='{esc(e['id'])}' data-tf='{esc(tf)}'>Ver en la grafica</button></div>")
+
+def _tarjeta15(E15, esc):
+    if not E15:
+        return "<div class='card'><h2>Escenarios 15 min</h2><div class='mut'>No disponibles: Yahoo no entrego velas de 15 min. Usa /escenarios15 en el bot.</div></div>"
+    s = "<div class='card'><h2>Escenarios 15 min</h2>"
+    dias = E15["escenarios"][0]["simulacion"]["dias"] if E15["escenarios"] else 1
+    s += (f"<div class='mut'>Solo a favor de la tendencia: {esc(E15['tendencia'])} ({esc(E15['tendencia_razon'])}). "
+          f"Calculados con la vela 15m de las {esc(E15.get('base_hora_gdl',''))} GDL (cierre {fmt(E15.get('base_cierre_15m'))}); cambian cada 15 min. "
+          f"Stop = 1.5 ATR 15m + $0.40 (ATR 15m {fmt(E15.get('atr15'))}), objetivo 2R. Simulacion: Montecarlo y repeticion historica, {dias} dia de trading (~92 velas).</div>")
+    s += f"<div id='e15-age' class='warnbox' data-base='{esc(E15.get('base_iso',''))}' hidden></div>"
+    if E15["no_operar"]:
+        s += "<div class='warnbox'><b>Condiciones para NO operar</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in E15["no_operar"]) + "</ul></div>"
+    s += "<div class='grid'>"
+    for e in E15["escenarios"]:
+        s += _card_esc(e, esc, "m15")
+    if not E15["escenarios"]:
+        s += "<div class='mut'>No hay niveles utiles para armar escenarios de 15 min.</div>"
+    s += "</div>"
+    if E15.get("tipo_cuenta") == "cent" and E15.get("cuenta_configurada"):
+        s += f"<div class='mut' style='margin-top:10px'>{esc(NOTA_CENT)}</div>"
+    s += "<div class='mut' style='margin-top:10px'>Son escenarios condicionales, no recomendaciones. La decision es tuya.</div></div>"
+    return s
+
+def render_dashboard(t, h4, d1, brief, E, noticias, ev, now, m15=None, E15=None):
     esc = lambda s: html.escape(str(s), quote=True)
     p = t["precio"]; chg, pct = brief.get("cambio"), brief.get("cambio_pct")
     cls = "up" if (chg or 0) >= 0 else "dn"
@@ -1108,27 +1356,7 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
         s += "<div class='warnbox'><b>Condiciones para NO operar</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in E["no_operar"]) + "</ul></div>"
     s += "<div class='grid'>"
     for e in E["escenarios"]:
-        sm = e["simulacion"]; mc = sm["montecarlo"]; h = sm["historico"]
-        tags = ""
-        if e.get("mejor"):
-            tags += "<div class='tag'>Mejor balance segun la simulacion</div>"
-        if e["contra_tendencia"]:
-            tags += "<div class='tag warn'>Contra tendencia, mas riesgo</div>"
-        def bar(m):
-            return (f"<div class='bar'><i class='b-t' style='width:{m['objetivo_primero_pct']:.1f}%'></i><i class='b-s' style='width:{m['stop_primero_pct']:.1f}%'></i><i class='b-n' style='width:{m['ninguno_pct']:.1f}%'></i></div>"
-                    f"<div class='mut'>objetivo {m['objetivo_primero_pct']:.0f}% | stop {m['stop_primero_pct']:.0f}% | ninguno {m['ninguno_pct']:.0f}% | R {m['r_promedio']:+.2f}</div>")
-        lot = ""
-        if "lotes" in e:
-            l = e["lotes"]
-            lot = f"<tr><td>Lotes</td><td>{esc(l['nota']) if l['rechazado'] else format(l['lotes'], '.2f') + ' (perdida en stop $' + fmt(l['perdida_en_stop_usd']) + ')'}</td></tr>"
-        s += (f"<div class='esc{' best' if e.get('mejor') else ''}' data-esc='{esc(e['id'])}'><h3>[{esc(e['id'])}] {esc(e['nombre'])}</h3>{tags}"
-              f"<div class='mut'>{esc(e['disparador'])}</div>"
-              f"<table class='k'><tr><td>Entrada</td><td>{fmt(e['entrada'])}</td></tr><tr><td>Stop</td><td>{fmt(e['stop'])}</td></tr>"
-              f"<tr><td>Objetivo</td><td>{fmt(e['objetivo'])}</td></tr><tr><td>R</td><td>{e['r_multiplo']:.0f}R</td></tr>"
-              f"<tr><td>Riesgo por onza</td><td>${fmt(e['riesgo_usd_oz'])}</td></tr><tr><td>Distancia al precio</td><td>{e['distancia_precio']:+.2f}</td></tr>{lot}</table>"
-              f"<div class='mut' style='margin-top:6px'>Montecarlo</div>{bar(mc)}<div class='mut'>Historico ({h['casos']:,} casos)</div>{bar(h)}"
-              f"<div class='mut'>{esc(sm['veredicto'])} (R prom. {sm['r_promedio']:+.2f})</div>"
-              f"<button class='ver' type='button' data-ver='{esc(e['id'])}'>Ver en la grafica</button></div>")
+        s += _card_esc(e, esc, "h4")
     if not E["escenarios"]:
         s += "<div class='mut'>No hay niveles utiles para armar escenarios.</div>"
     s += "</div><div class='mut' style='margin-top:10px'>Son escenarios condicionales, no recomendaciones. La decision es tuya.</div></div>"
@@ -1188,9 +1416,34 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
             {"precio": round(e["objetivo"], 2), "titulo": f"Objetivo {rango('objetivo_primero_pct')}", "tipo": "obj"}]})
     data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "escs": escs, "atr": t["4h"]["atr14"],
             "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M"), "fuente": t["simbolo"]}
+    if m15 and E15:
+        data["m15"] = _chart_bloque(m15, 120, False, (20, 50))
+        data["atr15"] = E15["atr15"]
+        data["escs15"] = []
+        for e in E15["escenarios"]:
+            sm = e["simulacion"]; m_, h_ = sm["montecarlo"], sm["historico"]
+            def rango15(k):
+                a_, b_ = sorted((m_[k], h_[k]))
+                return f"{a_:.0f}%" if round(a_) == round(b_) else f"{a_:.0f}-{b_:.0f}%"
+            nom = "largo" if e["direccion"] == "largo" else "corto"
+            data["escs15"].append({"id": e["id"], "nombre": e["nombre"], "mejor": bool(e.get("mejor")), "lineas": [
+                {"precio": round(e["entrada"], 2), "titulo": f"Entrada {nom} 15m (si se activa)", "tipo": "entrada"},
+                {"precio": round(e["stop"], 2), "titulo": f"Stop {rango15('stop_primero_pct')}", "tipo": "stop"},
+                {"precio": round(e["objetivo"], 2), "titulo": f"Objetivo {rango15('objetivo_primero_pct')}", "tipo": "obj"}]})
+        l15, bb, a15 = [], E15["base_cierre_15m"], E15["atr15"]
+        def add15(v, tit):
+            if v is not None and not any(abs(l["precio"] - v) < 0.005 for l in l15):
+                l15.append({"precio": round(v, 2), "titulo": tit, "tipo": "nivel"})
+        add15(n_["max_dia_previo"], "Max ayer"); add15(n_["min_dia_previo"], "Min ayer")
+        add15(n_["max_asia"], "Max Asia"); add15(n_["min_asia"], "Min Asia")
+        add15(E15["swing16"][0], "Max 16 velas"); add15(E15["swing16"][1], "Min 16 velas")
+        v_ = math.floor((bb - 4 * a15) / 25) * 25
+        while v_ <= bb + 4 * a15:
+            add15(float(v_), f"${v_:,.0f}"); v_ += 25
+        data["lineas15"] = l15
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     head += tarjeta_analista()
-    page = (DASH_HTML.replace("__HEADER__", head).replace("__KPIS__", kp).replace("__ESC__", s).replace("__EVENTOS__", evh)
+    page = (DASH_HTML.replace("__HEADER__", head).replace("__KPIS__", kp).replace("__ESC__", s).replace("__ESC15__", _tarjeta15(E15, esc)).replace("__EVENTOS__", evh)
             .replace("__NOTICIAS__", nh).replace("__FUENTE__", esc(fuente)).replace("__DATA__", js))
     return page
 
@@ -1241,13 +1494,23 @@ def cmd_dashboard(a):
     save("briefing.json", brief); save("precio.json", precio); save("tecnico.json", t)
     E = escenarios_data(t, h1, h4, d1, ev, now, a.rutas, 5)
     save("escenarios.json", E)
+    m15, E15 = None, None
+    try:
+        m15, sym15 = cargar_15m()
+        if m15:
+            E15 = escenarios15_data(t, m15, h1, h4, d1, ev, now, a.rutas, 1)
+            E15["simbolo_15m"] = sym15
+            save("escenarios15.json", E15)
+    except (Exception, SystemExit) as ex:
+        print("Aviso: no se pudieron armar los escenarios de 15 min:", ex)
+        m15, E15 = None, None
     lista, fallas = noticias_fetch(48)
     save("noticias.json", {"generado_gdl": now.astimezone(GDL).strftime("%Y-%m-%d %H:%M"), "horas": 48, "fallas": fallas, "mostradas": lista[:30], "total_ventana": len(lista)})
-    page = render_dashboard(t, h4, d1, brief, E, lista, ev, now)
+    page = render_dashboard(t, h4, d1, brief, E, lista, ev, now, m15, E15)
     OUT.mkdir(parents=True, exist_ok=True)
     path = (OUT / "dashboard.html").resolve()
     path.write_text(page, encoding="utf-8")
-    print(f"Dashboard listo ({E['generado_gdl']} hora Guadalajara): {len(E['escenarios'])} escenarios, {len(lista)} titulares" + (f", sin respuesta: {', '.join(fallas)}" if fallas else ""))
+    print(f"Dashboard listo ({E['generado_gdl']} hora Guadalajara): {len(E['escenarios'])} escenarios 4H, {len(E15['escenarios']) if E15 else 0} de 15m, {len(lista)} titulares" + (f", sin respuesta: {', '.join(fallas)}" if fallas else ""))
     if E["no_operar"]:
         print("Condiciones para NO operar: " + " | ".join(E["no_operar"]))
     print(str(path))
@@ -1275,14 +1538,16 @@ def main():
     p = sp.add_parser("tamano")
     p.add_argument("--cuenta", type=float); p.add_argument("--riesgo", type=float); p.add_argument("--tope-dia", type=float)
     p.add_argument("--dist", type=float, help="distancia del stop en USD por onza (si no, usa plan.json)")
+    p.add_argument("--tipo", choices=["standard", "cent"], help="tipo de cuenta: standard (1 lote=100 oz) o cent (1 lote=1 oz)")
     p = sp.add_parser("noticias")
     p.add_argument("--horas", type=int, default=48); p.add_argument("--max", type=int, default=20)
     p.add_argument("--todas", action="store_true", help="muestra todo lo de la ventana, no solo lo nuevo")
     p.add_argument("--no-marcar", action="store_true", help="no actualiza noticias_vistas.json")
     p = sp.add_parser("escenarios"); p.add_argument("--rutas", type=int, default=3000); p.add_argument("--dias", type=int, default=5)
+    p = sp.add_parser("escenarios15"); p.add_argument("--rutas", type=int, default=3000); p.add_argument("--dias", type=int, default=1)
     p = sp.add_parser("dashboard"); p.add_argument("--abrir", action="store_true"); p.add_argument("--rutas", type=int, default=3000)
     a = ap.parse_args()
-    {"noticias": cmd_noticias, "briefing": cmd_briefing, "tecnico": cmd_tecnico, "plan": cmd_plan, "timemachine": cmd_timemachine, "tamano": cmd_tamano, "escenarios": cmd_escenarios, "dashboard": cmd_dashboard,
+    {"noticias": cmd_noticias, "briefing": cmd_briefing, "tecnico": cmd_tecnico, "plan": cmd_plan, "timemachine": cmd_timemachine, "tamano": cmd_tamano, "escenarios": cmd_escenarios, "escenarios15": cmd_escenarios15, "dashboard": cmd_dashboard,
      None: cmd_briefing}[a.cmd](a)
 
 if __name__ == "__main__":
