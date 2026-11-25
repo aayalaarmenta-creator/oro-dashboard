@@ -912,7 +912,7 @@ __KPIS__
 <div id="chart"></div>
 <div class="legend" id="nivlist"></div>
 <div class="legend" id="ult"></div>
-<div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado. Lineas solidas: el escenario destacado (entrada dorada, stop rojo, objetivo verde). Punteadas grises: niveles cercanos (boton Niveles para ocultarlos). Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
+<div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado. Lineas solidas: el escenario destacado, que solo cuenta si se cumple su disparador (entrada dorada, stop rojo, objetivo verde); el % es la probabilidad simulada de tocar ese nivel primero, no un pronostico. Punteadas grises: niveles cercanos (boton Niveles para ocultarlos). Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
 __ESC__
 __EVENTOS__
 __NOTICIAS__
@@ -1145,7 +1145,14 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
     for k in ("50_abajo", "50_arriba", "100_abajo", "100_arriba"):
         add(r_[k], f"${r_[k]:,.0f}")
     if top_e:
-        add(top_e["entrada"], f"Entrada {top_e['id']}", "entrada"); add(top_e["stop"], f"Stop {top_e['id']}", "stop"); add(top_e["objetivo"], f"Objetivo {top_e['id']}", "obj")
+        sm = top_e["simulacion"]; m_, h_ = sm["montecarlo"], sm["historico"]
+        def rango(k):
+            a_, b_ = sorted((m_[k], h_[k]))
+            return f"{a_:.0f}%" if round(a_) == round(b_) else f"{a_:.0f}-{b_:.0f}%"
+        nom = "rebote" if top_e["direccion"] == "largo" else "corto"
+        add(top_e["entrada"], f"Entrada {nom} (si se activa) {top_e['id']}", "entrada")
+        add(top_e["stop"], f"Stop {rango('stop_primero_pct')} {top_e['id']}", "stop")
+        add(top_e["objetivo"], f"Objetivo {rango('objetivo_primero_pct')} {top_e['id']}", "obj")
     data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "atr": t["4h"]["atr14"],
             "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M")}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
