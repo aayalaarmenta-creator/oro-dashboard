@@ -1,0 +1,36 @@
+{
+    "generado_gdl":  "2026-11-25 10:58",
+    "sesgo":  "bajista",
+    "confianza":  "media-baja",
+    "escenario_preferido":  "B",
+    "resumen":  "Oro (futuros GC=F) en 3,481, -2.3% en el dia, cerca de minimos de 15 meses. Diario y 4H bajistas, pero el RSI esta en 28 en ambos: tendencia fuerte con riesgo real de rebote tecnico.",
+    "lo_mas_probable":  "Lo mas probable es que siga la presion bajista con rebotes cortos: un rebote hacia 3,500 (y como mucho hacia la EMA20 4H, ~3,575) que probablemente se venda, o una ruptura del minimo de la semana (3,453.8). Ojo: el spot en vivo ya cotiza ~30 dolares abajo de los futuros, asi que ese minimo ya se toco en spot. Ninguno de los 3 escenarios tiene ventaja estadistica (R promedio entre -0.06 y +0.10, moneda al aire); el B (corto si rechaza en 3,500) es el unico a favor de la tendencia con una condicion clara, pero su simulacion sale ligeramente negativa. Esperar a que cierre una vela 4H antes de decidir evita el ruido del jueves.",
+    "por_que":  [
+                    "Fed: titulares de hoy (Yahoo Finance, Beinsure, bloomingbit) hablan de apuestas de alza de tasas; la proxima decision FOMC es el 9 de diciembre. Tasas altas por mas tiempo restan atractivo al oro, que no paga interes.",
+                    "Inflacion y crecimiento: TradingView y Cryptonews reportan un Core PCE mas caliente y la prensa menciona revision al alza del PIB; datos fuertes sostienen la postura restrictiva de la Fed.",
+                    "Contradiccion: TradingView dice que los rendimientos bajaron pese al PCE, y la tasa real 10y (2.79%, Tesoro) cayo 10 pb en 5 dias; el DXY esta casi plano hoy (103.76). El dolar y los rendimientos no explican bien la caida de hoy, por eso el sesgo del script sale neutral (-1) aunque el precio y el tecnico son claramente bajistas.",
+                    "Aranceles: Yahoo Finance y BigGo mencionan nuevas amenazas arancelarias como otro factor de presion sobre el oro estos dias.",
+                    "Tecnico: precio bajo EMA20/50/200 en diario y 4H; RSI 27.5 diario y 27.8 4H (sobreventa) suele dar rebotes, pero en tendencias fuertes puede seguir sobrevendido varios dias.",
+                    "Calendario: jueves 26 es feriado en EE.UU. (Accion de Gracias) y el viernes hay poco volumen: los movimientos pueden ser erraticos. Hoy 13:00 GDL sale el Beige Book (bajo impacto)."
+                ],
+    "que_lo_invalida":  "Un cierre de vela 4H arriba de 3,575 (EMA20 4H y maximo de Asia) anularia la lectura bajista de corto plazo. Una ruptura limpia debajo de 3,453.8 con cierre 4H la reforzaria. Un cambio de tono de la Fed (menos apuestas de alza) o un salto del dolar tambien cambiarian el cuadro.",
+    "correcciones":  [
+                         "Agregue una nota en la caja de spot en vivo: la grafica, los niveles y los escenarios usan futuros GC=F y el spot (gold-api.com) cotiza decenas de dolares distinto (hoy ~3,450 vs 3,481); antes se veian juntos sin aclararlo.",
+                         "El calendario ahora incluye feriados de EE.UU. (hoy se perdia el feriado de Accion de Gracias del jueves) y avisa cuando el calendario en linea no responde y se usa el respaldo, para que no diga solo \u0027Ninguno en las proximas 48 h\u0027.",
+                         "Revise lo demas (cifras de escenarios, probabilidades, velas, noticias, DXY, tasa real): coinciden con las fuentes; no encontre otros errores. El sesgo \u0027neutral / mixto\u0027 es la regla del script (puntaje -1, umbral +-2), no un error, pero queda matizado arriba."
+                     ],
+    "fuentes":  [
+                    {
+                        "medio":  "Kitco/Reuters (16-nov): apuestas de alza de la Fed y dolar resiliente",
+                        "url":  "https://www.kitco.com/news/off-the-wire/2026-11-16/gold-hits-over-one-year-low-resilient-dollar-hawkish-fed-bets-build"
+                    },
+                    {
+                        "medio":  "Korea Times (17-nov)",
+                        "url":  "https://www.koreatimes.co.kr/world/20261117/gold-drops-to-more-than-one-year-low-as-us-dollar-marches-higher"
+                    },
+                    {
+                        "medio":  "Euronews (17-nov)",
+                        "url":  "https://www.euronews.com/2026/11/17/why-gold-and-silver-prices-have-fallen-to-their-lowest-in-over-a-year"
+                    }
+                ]
+}

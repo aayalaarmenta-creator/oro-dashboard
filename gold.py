@@ -237,7 +237,7 @@ def calendario(now_utc):
             if e.get("country") != "USD":
                 continue
             imp = e.get("impact")
-            if imp == "High" or (imp == "Medium" and any(k in e.get("title", "") for k in kw)):
+            if imp in ("High", "Holiday") or (imp == "Medium" and any(k in e.get("title", "") for k in kw)):
                 t = datetime.fromisoformat(e["date"]).astimezone(GDL)
                 ev.append({"cuando_gdl": t.strftime("%Y-%m-%d %H:%M"), "evento": e["title"], "impacto": imp,
                            "previo": e.get("previous"), "pronostico": e.get("forecast")})
@@ -1019,7 +1019,7 @@ window.addEventListener('resize',function(){chart.applyOptions({width:el.clientW
 (function(){
 // Precio spot en vivo (gold-api.com; respaldo Binance PAXG). Si la red lo bloquea, no se muestra nada.
 var box=document.getElementById('vivo');if(!box||!window.fetch)return;
-var prev=null,last=null;
+var prev=null,last=null,fgc=false;try{fgc=JSON.parse(document.getElementById('datos').textContent).fuente==='GC=F';}catch(e){}
 function show(p,src){
  var c=prev===null?'':(p>prev?'up':p<prev?'dn':'');prev=p;last=Date.now();
  box.hidden=false;box.textContent='';
@@ -1027,6 +1027,7 @@ function show(p,src){
  box.appendChild(document.createTextNode('Spot en vivo '));
  var b=document.createElement('b');b.className=c;b.textContent=p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});box.appendChild(b);
  var s=document.createElement('span');s.className='mut';s.id='vivo-t';s.textContent=' ('+src+', ahora)';box.appendChild(s);
+ if(fgc){var w=document.createElement('div');w.className='mut';w.textContent='Ojo: la grafica, los niveles y los escenarios usan futuros GC=F, no este spot; pueden diferir decenas de dolares. Compara contra el mismo tipo de precio.';box.appendChild(w);}
 }
 function tick(){
  fetch('https://api.gold-api.com/price/XAU',{cache:'no-store'}).then(function(r){return r.json();}).then(function(j){
@@ -1146,6 +1147,8 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
                    + (f"<span class='mut'> previo {esc(x.get('previo'))} / pron. {esc(x.get('pronostico'))}</span>" if x.get("previo") or x.get("pronostico") else "") + "</li>" for x in prox)
     if not prox:
         evh += "<li class='mut'>Ninguno en las proximas 48 h.</li>"
+    if str(brief.get("fuente_eventos", "")).startswith("respaldo"):
+        evh += "<li class='mut'>El calendario en linea no respondio; esta lista es de respaldo y puede estar incompleta. Verifica en forexfactory.com.</li>"
     evh += "</ul></div>"
     # noticias
     top = sorted(noticias, key=lambda n: (n["relevancia"], n["utc"]), reverse=True)[:10]
@@ -1184,7 +1187,7 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
             {"precio": round(e["stop"], 2), "titulo": f"Stop {rango('stop_primero_pct')}", "tipo": "stop"},
             {"precio": round(e["objetivo"], 2), "titulo": f"Objetivo {rango('objetivo_primero_pct')}", "tipo": "obj"}]})
     data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "escs": escs, "atr": t["4h"]["atr14"],
-            "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M")}
+            "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M"), "fuente": t["simbolo"]}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     head += tarjeta_analista()
     page = (DASH_HTML.replace("__HEADER__", head).replace("__KPIS__", kp).replace("__ESC__", s).replace("__EVENTOS__", evh)
