@@ -5,6 +5,8 @@ on:
     # Cada 15 min, domingo a viernes (hora UTC). GitHub puede retrasar unos minutos.
     - cron: "*/15 * * * 0-5"
   workflow_dispatch: {}
+  push:
+    branches: [main]
 
 permissions:
   contents: read
