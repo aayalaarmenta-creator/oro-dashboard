@@ -908,10 +908,11 @@ footer{font-size:.8rem;color:var(--mut);padding:8px 0 24px}
 __HEADER__
 __KPIS__
 <div class="card"><h2>Grafica</h2>
-<div class="btns"><button id="b4" class="on">4H</button> <button id="bd">Diario</button></div>
+<div class="btns"><button id="b4" class="on">4H</button> <button id="bd">Diario</button> <button id="bn" class="on">Niveles</button></div>
 <div id="chart"></div>
+<div class="legend" id="nivlist"></div>
 <div class="legend" id="ult"></div>
-<div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado. Lineas punteadas: niveles y escenario destacado. Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
+<div class="legend">EMA20 azul, EMA50 naranja, EMA200 morado. Lineas solidas: el escenario destacado (entrada dorada, stop rojo, objetivo verde). Punteadas grises: niveles cercanos (boton Niveles para ocultarlos). Hora de Guadalajara (UTC-6). Cada vela se marca con su hora de apertura.</div></div>
 __ESC__
 __EVENTOS__
 __NOTICIAS__
@@ -926,7 +927,7 @@ var el=document.getElementById('chart');
 if(typeof LightweightCharts==='undefined'){el.textContent='No se pudo cargar la libreria de graficas (sin internet).';return;}
 function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
 var chart=LightweightCharts.createChart(el,{width:el.clientWidth,height:el.clientHeight,
- layout:{background:{color:css('--card')},textColor:css('--ink')},
+ layout:{background:{color:css('--card')},textColor:css('--ink'),fontSize:11},
  grid:{vertLines:{color:css('--chart-grid')},horzLines:{color:css('--chart-grid')}},
  rightPriceScale:{borderColor:css('--line')},timeScale:{borderColor:css('--line'),timeVisible:true,secondsVisible:false}});
 var up=css('--up'),dn=css('--dn');
@@ -938,7 +939,8 @@ function setTF(tf){
  var d=D[tf];cs.setData(d.velas);
  ['ema20','ema50','ema200'].forEach(function(k){es[k].setData(d[k]);});
  chart.applyOptions({timeScale:{timeVisible:tf==='h4'}});
- chart.timeScale().fitContent();
+ var nv=d.velas.length,vis=el.clientWidth<600?(tf==='h4'?45:60):(tf==='h4'?100:140);
+ chart.timeScale().setVisibleLogicalRange({from:Math.max(0,nv-vis),to:nv+2});
  document.getElementById('b4').className=tf==='h4'?'on':'';
  document.getElementById('bd').className=tf==='d'?'on':'';
  var v=d.velas[d.velas.length-1],t=new Date(v.time*1000),p=function(n){return (n<10?'0':'')+n;};
@@ -947,10 +949,40 @@ function setTF(tf){
   u.textContent='Ultima vela 4H (en curso): abrio '+p(t.getUTCHours())+':00 y cierra '+p(f.getUTCHours())+':00. Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara).';}
  else{u.textContent='Ultima vela diaria (en curso). Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara).';}
 }
-D.lineas.forEach(function(l){
- var c=l.tipo==='stop'?dn:l.tipo==='obj'?up:l.tipo==='entrada'?css('--gold'):css('--mut');
- lines.push(cs.createPriceLine({price:l.precio,color:c,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:l.titulo}));
+// Lineas: el escenario (entrada/stop/objetivo) con etiqueta en el eje; los niveles finos, sin etiqueta
+// en el eje, agrupados cuando quedan juntos y solo los cercanos al precio.
+var atr=D.atr||20,tol=Math.max(1,atr*0.15);
+var vel=D.h4.velas,ref=vel[vel.length-1].close;
+var esc_=[],niv=[];
+D.lineas.forEach(function(l){(l.tipo==='nivel'?niv:esc_).push({precio:l.precio,titulo:l.titulo,tipo:l.tipo});});
+esc_.forEach(function(e){e.titulo=e.titulo.replace(/ [A-Z]$/,'');});
+niv=niv.filter(function(n){
+ var s=esc_.filter(function(e){return Math.abs(e.precio-n.precio)<=tol;})[0];
+ if(s){s.titulo+=' / '+n.titulo;return false;}
+ return Math.abs(n.precio-ref)<=atr*3;
+}).sort(function(a,b){return a.precio-b.precio;});
+var grp=[];niv.forEach(function(n){var g=grp[grp.length-1];
+ if(g&&n.precio-g.precio<=tol){g.titulo+=' / '+n.titulo;}else{grp.push(n);}});
+var nivLines=[];
+esc_.forEach(function(l){
+ var c=l.tipo==='stop'?dn:l.tipo==='obj'?up:css('--gold');
+ cs.createPriceLine({price:l.precio,color:c,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:l.titulo});
 });
+function showNiv(on){
+ nivLines.forEach(function(p){cs.removePriceLine(p);});nivLines=[];
+ if(on)grp.forEach(function(l){nivLines.push(cs.createPriceLine({price:l.precio,color:css('--mut'),lineWidth:1,lineStyle:1,axisLabelVisible:false,title:l.titulo}));});
+ var b=document.getElementById('bn');if(b)b.className=on?'on':'';
+}
+var nivOn=true;showNiv(true);
+// Los nombres de los niveles van abajo de la grafica (en el eje se amontonan).
+(function(){var box=document.getElementById('nivlist');if(!box)return;
+ var all=grp.slice().sort(function(a,b){return b.precio-a.precio;});
+ box.textContent='';var h=document.createElement('b');h.textContent='Niveles cercanos: ';box.appendChild(h);
+ all.forEach(function(l,i){var s=document.createElement('span');s.className=l.precio>ref?'dn':'up';
+  s.textContent=/^\$[\d,]+$/.test(l.titulo)?l.titulo:l.titulo+' '+l.precio.toLocaleString('en-US',{minimumFractionDigits:2});box.appendChild(s);
+  if(i<all.length-1)box.appendChild(document.createTextNode('  |  '));});
+ var n=document.createElement('div');n.textContent='Rojo = resistencia (arriba del precio), verde = soporte (abajo).';box.appendChild(n);})();
+document.getElementById('bn').onclick=function(){nivOn=!nivOn;showNiv(nivOn);};
 document.getElementById('b4').onclick=function(){setTF('h4');};
 document.getElementById('bd').onclick=function(){setTF('d');};
 setTF('h4');
@@ -1106,15 +1138,15 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
     def add(v, tit, tipo="nivel"):
         if v is not None and not any(abs(l["precio"] - v) < 0.005 and l["tipo"] == tipo for l in lineas):
             lineas.append({"precio": round(v, 2), "titulo": tit, "tipo": tipo})
-    add(n_["max_dia_previo"], "Max dia previo"); add(n_["min_dia_previo"], "Min dia previo")
-    add(n_["max_semana"], "Max semana"); add(n_["min_semana"], "Min semana")
+    add(n_["max_dia_previo"], "Max ayer"); add(n_["min_dia_previo"], "Min ayer")
+    add(n_["max_semana"], "Max sem"); add(n_["min_semana"], "Min sem")
     add(n_["max_asia"], "Max Asia"); add(n_["min_asia"], "Min Asia")
     r_ = t["redondos"]
     for k in ("50_abajo", "50_arriba", "100_abajo", "100_arriba"):
         add(r_[k], f"${r_[k]:,.0f}")
     if top_e:
         add(top_e["entrada"], f"Entrada {top_e['id']}", "entrada"); add(top_e["stop"], f"Stop {top_e['id']}", "stop"); add(top_e["objetivo"], f"Objetivo {top_e['id']}", "obj")
-    data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas,
+    data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "atr": t["4h"]["atr14"],
             "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M")}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     page = (DASH_HTML.replace("__HEADER__", head).replace("__KPIS__", kp).replace("__ESC__", s).replace("__EVENTOS__", evh)
