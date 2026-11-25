@@ -888,7 +888,11 @@ h1{font-size:1.2rem;margin:0}h2{font-size:1.05rem;margin:0 0 10px;color:var(--go
 .legend{font-size:.78rem;color:var(--mut);margin-top:6px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
 .esc{border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
-.esc.best{border:2px solid var(--gold);background:var(--goldbg)}
+.esc.best{background:var(--goldbg)}
+.esc.sel{border:2px solid var(--gold);box-shadow:0 0 0 2px var(--gold)}
+button.ver{margin-top:8px;background:var(--card);color:var(--gold);border:1px solid var(--gold);border-radius:8px;padding:6px 12px;font-size:.85rem;cursor:pointer;width:100%}
+.esc.sel button.ver{background:var(--gold);color:var(--card);font-weight:600}
+.btns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.btns .sep{color:var(--mut);font-size:.8rem;margin-left:6px}
 .esc h3{margin:0 0 4px;font-size:1rem}
 .tag{font-size:.75rem;font-weight:600;color:var(--gold)}
 .tag.warn{color:var(--dn)}
@@ -908,7 +912,7 @@ footer{font-size:.8rem;color:var(--mut);padding:8px 0 24px}
 __HEADER__
 __KPIS__
 <div class="card"><h2>Grafica</h2>
-<div class="btns"><button id="b4" class="on">4H</button> <button id="bd">Diario</button> <button id="bn" class="on">Niveles</button></div>
+<div class="btns"><button id="b4" class="on">4H</button> <button id="bd">Diario</button> <button id="bn" class="on">Niveles</button><span class="sep">Escenario:</span><span id="besc" class="btns"></span></div>
 <div id="chart"></div>
 <div class="legend" id="nivlist"></div>
 <div class="legend" id="ult"></div>
@@ -949,40 +953,57 @@ function setTF(tf){
   u.textContent='Ultima vela 4H (en curso): abrio '+p(t.getUTCHours())+':00 y cierra '+p(f.getUTCHours())+':00. Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara).';}
  else{u.textContent='Ultima vela diaria (en curso). Cierre actual '+v.close.toFixed(2)+'. Datos al '+D.generado+' (hora Guadalajara).';}
 }
-// Lineas: el escenario (entrada/stop/objetivo) con etiqueta en el eje; los niveles finos, sin etiqueta
-// en el eje, agrupados cuando quedan juntos y solo los cercanos al precio.
+// Lineas: el escenario elegido (entrada/stop/objetivo) con etiqueta en el eje; los niveles finos, sin
+// etiqueta en el eje, agrupados cuando quedan juntos y solo los cercanos al precio.
 var atr=D.atr||20,tol=Math.max(1,atr*0.15);
 var vel=D.h4.velas,ref=vel[vel.length-1].close;
-var esc_=[],niv=[];
-D.lineas.forEach(function(l){(l.tipo==='nivel'?niv:esc_).push({precio:l.precio,titulo:l.titulo,tipo:l.tipo});});
-esc_.forEach(function(e){e.titulo=e.titulo.replace(/ [A-Z]$/,'');});
-niv=niv.filter(function(n){
- var s=esc_.filter(function(e){return Math.abs(e.precio-n.precio)<=tol;})[0];
- if(s){s.titulo+=' / '+n.titulo;return false;}
- return Math.abs(n.precio-ref)<=atr*3;
-}).sort(function(a,b){return a.precio-b.precio;});
-var grp=[];niv.forEach(function(n){var g=grp[grp.length-1];
- if(g&&n.precio-g.precio<=tol){g.titulo+=' / '+n.titulo;}else{grp.push(n);}});
-var nivLines=[];
-esc_.forEach(function(l){
- var c=l.tipo==='stop'?dn:l.tipo==='obj'?up:css('--gold');
- cs.createPriceLine({price:l.precio,color:c,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:l.titulo});
-});
-function showNiv(on){
- nivLines.forEach(function(p){cs.removePriceLine(p);});nivLines=[];
- if(on)grp.forEach(function(l){nivLines.push(cs.createPriceLine({price:l.precio,color:css('--mut'),lineWidth:1,lineStyle:1,axisLabelVisible:false,title:l.titulo}));});
- var b=document.getElementById('bn');if(b)b.className=on?'on':'';
-}
-var nivOn=true;showNiv(true);
-// Los nombres de los niveles van abajo de la grafica (en el eje se amontonan).
-(function(){var box=document.getElementById('nivlist');if(!box)return;
+var escs=(D.escs||[]).slice().sort(function(x,y){return x.id<y.id?-1:1;}),escP=[],sel=((escs.filter(function(e){return e.mejor;})[0])||escs[0]||{}).id;
+var nivOn=true,drawn=[];
+function copia(l){return {precio:l.precio,titulo:l.titulo,tipo:l.tipo};}
+function draw(){
+ drawn.forEach(function(p){cs.removePriceLine(p);});drawn=[];
+ var e=escs.filter(function(x){return x.id===sel;})[0];
+ var esc_=e?e.lineas.map(copia):[];escP=esc_.map(function(l){return l.precio;});
+ var niv=D.lineas.filter(function(l){return l.tipo==='nivel';}).map(copia).filter(function(n){
+  var s=esc_.filter(function(x){return Math.abs(x.precio-n.precio)<=tol;})[0];
+  if(s){s.titulo+=' / '+n.titulo;return false;}
+  return Math.abs(n.precio-ref)<=atr*3;
+ }).sort(function(a,b){return a.precio-b.precio;});
+ var grp=[];niv.forEach(function(n){var g=grp[grp.length-1];
+  if(g&&n.precio-g.precio<=tol){g.titulo+=' / '+n.titulo;}else{grp.push(n);}});
+ esc_.forEach(function(l){
+  var c=l.tipo==='stop'?dn:l.tipo==='obj'?up:css('--gold');
+  drawn.push(cs.createPriceLine({price:l.precio,color:c,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:l.titulo}));
+ });
+ if(nivOn)grp.forEach(function(l){drawn.push(cs.createPriceLine({price:l.precio,color:css('--mut'),lineWidth:1,lineStyle:1,axisLabelVisible:false,title:l.titulo}));});
+ document.getElementById('bn').className=nivOn?'on':'';
+ Array.prototype.forEach.call(document.querySelectorAll('#besc button'),function(b){b.className=b.getAttribute('data-id')===sel?'on':'';});
+ Array.prototype.forEach.call(document.querySelectorAll('.esc[data-esc]'),function(c){c.classList.toggle('sel',c.getAttribute('data-esc')===sel);});
+ Array.prototype.forEach.call(document.querySelectorAll('button.ver'),function(b){b.textContent=b.getAttribute('data-ver')===sel?'En la grafica':'Ver en la grafica';});
+ // Los nombres de los niveles van abajo de la grafica (en el eje se amontonan).
+ var box=document.getElementById('nivlist');if(!box)return;
  var all=grp.slice().sort(function(a,b){return b.precio-a.precio;});
- box.textContent='';var h=document.createElement('b');h.textContent='Niveles cercanos: ';box.appendChild(h);
+ box.textContent='';
+ if(e){var t=document.createElement('div');var tb=document.createElement('b');tb.textContent='En la grafica: ['+e.id+'] '+e.nombre;t.appendChild(tb);box.appendChild(t);}
+ var h=document.createElement('b');h.textContent='Niveles cercanos: ';box.appendChild(h);
  all.forEach(function(l,i){var s=document.createElement('span');s.className=l.precio>ref?'dn':'up';
   s.textContent=/^\$[\d,]+$/.test(l.titulo)?l.titulo:l.titulo+' '+l.precio.toLocaleString('en-US',{minimumFractionDigits:2});box.appendChild(s);
   if(i<all.length-1)box.appendChild(document.createTextNode('  |  '));});
- var n=document.createElement('div');n.textContent='Rojo = resistencia (arriba del precio), verde = soporte (abajo).';box.appendChild(n);})();
-document.getElementById('bn').onclick=function(){nivOn=!nivOn;showNiv(nivOn);};
+ var n=document.createElement('div');n.textContent='Rojo = resistencia (arriba del precio), verde = soporte (abajo).';box.appendChild(n);
+}
+// Que la escala vertical incluya entrada, stop y objetivo del escenario elegido.
+cs.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r||!escP.length)return r;
+ var lo=Math.min.apply(null,escP),hi=Math.max.apply(null,escP);
+ r.priceRange.minValue=Math.min(r.priceRange.minValue,lo-atr*0.3);r.priceRange.maxValue=Math.max(r.priceRange.maxValue,hi+atr*0.3);return r;}});
+function elegir(id){sel=id;draw();}
+(function(){var cont=document.getElementById('besc');if(!cont)return;
+ escs.forEach(function(e){var b=document.createElement('button');b.type='button';b.setAttribute('data-id',e.id);b.textContent=e.id;
+  b.title=e.nombre;b.onclick=function(){elegir(e.id);};cont.appendChild(b);});
+ Array.prototype.forEach.call(document.querySelectorAll('button.ver'),function(b){b.onclick=function(){
+  elegir(b.getAttribute('data-ver'));document.getElementById('chart').scrollIntoView({behavior:'smooth',block:'center'});};});
+})();
+draw();
+document.getElementById('bn').onclick=function(){nivOn=!nivOn;draw();};
 document.getElementById('b4').onclick=function(){setTF('h4');};
 document.getElementById('bd').onclick=function(){setTF('d');};
 setTF('h4');
@@ -1094,13 +1115,14 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
         if "lotes" in e:
             l = e["lotes"]
             lot = f"<tr><td>Lotes</td><td>{esc(l['nota']) if l['rechazado'] else format(l['lotes'], '.2f') + ' (perdida en stop $' + fmt(l['perdida_en_stop_usd']) + ')'}</td></tr>"
-        s += (f"<div class='esc{' best' if e.get('mejor') else ''}'><h3>[{esc(e['id'])}] {esc(e['nombre'])}</h3>{tags}"
+        s += (f"<div class='esc{' best' if e.get('mejor') else ''}' data-esc='{esc(e['id'])}'><h3>[{esc(e['id'])}] {esc(e['nombre'])}</h3>{tags}"
               f"<div class='mut'>{esc(e['disparador'])}</div>"
               f"<table class='k'><tr><td>Entrada</td><td>{fmt(e['entrada'])}</td></tr><tr><td>Stop</td><td>{fmt(e['stop'])}</td></tr>"
               f"<tr><td>Objetivo</td><td>{fmt(e['objetivo'])}</td></tr><tr><td>R</td><td>{e['r_multiplo']:.0f}R</td></tr>"
               f"<tr><td>Riesgo por onza</td><td>${fmt(e['riesgo_usd_oz'])}</td></tr><tr><td>Distancia al precio</td><td>{e['distancia_precio']:+.2f}</td></tr>{lot}</table>"
               f"<div class='mut' style='margin-top:6px'>Montecarlo</div>{bar(mc)}<div class='mut'>Historico ({h['casos']:,} casos)</div>{bar(h)}"
-              f"<div class='mut'>{esc(sm['veredicto'])} (R prom. {sm['r_promedio']:+.2f})</div></div>")
+              f"<div class='mut'>{esc(sm['veredicto'])} (R prom. {sm['r_promedio']:+.2f})</div>"
+              f"<button class='ver' type='button' data-ver='{esc(e['id'])}'>Ver en la grafica</button></div>")
     if not E["escenarios"]:
         s += "<div class='mut'>No hay niveles utiles para armar escenarios.</div>"
     s += "</div><div class='mut' style='margin-top:10px'>Son escenarios condicionales, no recomendaciones. La decision es tuya.</div></div>"
@@ -1145,16 +1167,18 @@ def render_dashboard(t, h4, d1, brief, E, noticias, ev, now):
     r_ = t["redondos"]
     for k in ("50_abajo", "50_arriba", "100_abajo", "100_arriba"):
         add(r_[k], f"${r_[k]:,.0f}")
-    if top_e:
-        sm = top_e["simulacion"]; m_, h_ = sm["montecarlo"], sm["historico"]
+    escs = []
+    for e in E["escenarios"]:
+        sm = e["simulacion"]; m_, h_ = sm["montecarlo"], sm["historico"]
         def rango(k):
             a_, b_ = sorted((m_[k], h_[k]))
             return f"{a_:.0f}%" if round(a_) == round(b_) else f"{a_:.0f}-{b_:.0f}%"
-        nom = "rebote" if top_e["direccion"] == "largo" else "corto"
-        add(top_e["entrada"], f"Entrada {nom} (si se activa) {top_e['id']}", "entrada")
-        add(top_e["stop"], f"Stop {rango('stop_primero_pct')} {top_e['id']}", "stop")
-        add(top_e["objetivo"], f"Objetivo {rango('objetivo_primero_pct')} {top_e['id']}", "obj")
-    data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "atr": t["4h"]["atr14"],
+        nom = "largo" if e["direccion"] == "largo" else "corto"
+        escs.append({"id": e["id"], "nombre": e["nombre"], "mejor": bool(e.get("mejor")), "lineas": [
+            {"precio": round(e["entrada"], 2), "titulo": f"Entrada {nom} (si se activa)", "tipo": "entrada"},
+            {"precio": round(e["stop"], 2), "titulo": f"Stop {rango('stop_primero_pct')}", "tipo": "stop"},
+            {"precio": round(e["objetivo"], 2), "titulo": f"Objetivo {rango('objetivo_primero_pct')}", "tipo": "obj"}]})
+    data = {"h4": _chart_bloque(h4, 150), "d": _chart_bloque(d1, 200, True), "lineas": lineas, "escs": escs, "atr": t["4h"]["atr14"],
             "generado": datetime.now(GDL).strftime("%Y-%m-%d %H:%M")}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     page = (DASH_HTML.replace("__HEADER__", head).replace("__KPIS__", kp).replace("__ESC__", s).replace("__EVENTOS__", evh)
